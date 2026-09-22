@@ -86,6 +86,7 @@ import type {
 	ExtensionWidgetOptions,
 	MarkdownTransformer,
 	ProjectTrustContext,
+	ThinkingSummaryProvider,
 	UserBashEventResult,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
@@ -449,8 +450,8 @@ export class InteractiveMode {
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working";
-	private readonly defaultHiddenThinkingLabel = "Thinking...";
-	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
+	private hiddenThinkingLabel: string | undefined;
+	private thinkingSummaryProvider: ThinkingSummaryProvider | undefined;
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
@@ -2283,7 +2284,7 @@ export class InteractiveMode {
 	}
 
 	private setHiddenThinkingLabel(label?: string): void {
-		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
+		this.hiddenThinkingLabel = label;
 		for (const child of this.chatContainer.children) {
 			if (child instanceof AssistantMessageComponent) {
 				child.setHiddenThinkingLabel(this.hiddenThinkingLabel);
@@ -2291,6 +2292,19 @@ export class InteractiveMode {
 		}
 		if (this.streamingComponent) {
 			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
+		}
+		this.ui.requestRender();
+	}
+
+	private setThinkingSummaryProvider(provider?: ThinkingSummaryProvider): void {
+		this.thinkingSummaryProvider = provider;
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setThinkingSummaryProvider(provider);
+			}
+		}
+		if (this.streamingComponent) {
+			this.streamingComponent.setThinkingSummaryProvider(provider);
 		}
 		this.ui.requestRender();
 	}
@@ -2550,6 +2564,7 @@ export class InteractiveMode {
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
+			setThinkingSummaryProvider: (provider) => this.setThinkingSummaryProvider(provider),
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
@@ -3390,6 +3405,7 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.getMarkdownTransformers(),
+						this.thinkingSummaryProvider,
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
@@ -3829,6 +3845,7 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.getMarkdownTransformers(),
+					this.thinkingSummaryProvider,
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;

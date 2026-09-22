@@ -17,6 +17,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	ThinkingSummaryProvider,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import {
@@ -190,6 +191,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		setHiddenThinkingLabel(_label?: string): void {
 			// Hidden thinking label not supported in RPC mode - requires TUI message rendering access
+		},
+
+		setThinkingSummaryProvider(_provider?: ThinkingSummaryProvider): void {
+			// Generated thinking summaries not supported in RPC mode - requires TUI message rendering access
 		},
 
 		setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {

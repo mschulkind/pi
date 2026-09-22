@@ -165,6 +165,7 @@ export type {
 	SetThinkingLevelHandler,
 	TerminalInputHandler,
 	ThinkingLevelSelectEvent,
+	ThinkingSummaryProvider,
 	// Events - Tool
 	ToolCallEvent,
 	ToolCallEventResult,

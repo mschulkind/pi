@@ -328,6 +328,7 @@ const noOpUIContext: ExtensionUIContext = {
 	setWorkingVisible: () => {},
 	setWorkingIndicator: () => {},
 	setHiddenThinkingLabel: () => {},
+	setThinkingSummaryProvider: () => {},
 	setWidget: () => {},
 	setFooter: () => {},
 	setHeader: () => {},

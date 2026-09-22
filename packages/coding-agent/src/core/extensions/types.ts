@@ -118,6 +118,17 @@ export interface ExtensionWidgetOptions {
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
+/**
+ * Supplies a generated summary for a collapsed thinking block.
+ *
+ * Called with the block's text and a stable content hash derived from it, so
+ * an extension can cache by the hash and only pay for generation once per
+ * distinct block. Return `undefined` to fall back to the block's own preview.
+ * The summary is rendered with a marker, and is never treated as quoted
+ * reasoning, because a reader must be able to tell the two apart.
+ */
+export type ThinkingSummaryProvider = (contentHash: string, text: string) => string | undefined;
+
 /** Working indicator configuration for the interactive streaming loader. */
 export interface WorkingIndicatorOptions {
 	/** Animation frames. Use an empty array to hide the indicator entirely. Custom frames are rendered verbatim. */
@@ -171,6 +182,14 @@ export interface ExtensionUIContext {
 
 	/** Set the label shown for hidden thinking blocks. Call with no argument to restore default. */
 	setHiddenThinkingLabel(label?: string): void;
+
+	/**
+	 * Register a provider for generated summaries of collapsed thinking blocks.
+	 * The provider is consulted per block once its text is complete, keyed by a
+	 * content hash of that text. Pass `undefined` to clear it and fall back to
+	 * each block's own preview.
+	 */
+	setThinkingSummaryProvider(provider?: ThinkingSummaryProvider): void;
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;

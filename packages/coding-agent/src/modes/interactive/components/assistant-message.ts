@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
-import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type { MarkdownTransformer, ThinkingSummaryProvider } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
@@ -9,13 +9,70 @@ const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 /**
+ * Collapsed-label defaults. These mirror the shipped `thinking-preview`
+ * extension so a block collapsed here and a block previewed there do not
+ * disagree: the first N non-blank lines joined onto one row, with a character
+ * backstop for a single runaway line.
+ */
+const DEFAULT_THINKING_PREVIEW_LINES = 6;
+const DEFAULT_THINKING_PREVIEW_CHARS = 900;
+const THINKING_PREVIEW_SEPARATOR = " \u00b7 ";
+const THINKING_PREVIEW_ELLIPSIS = "\u2026";
+/** Marks a label whose text was generated for the block, not quoted from it. */
+const GENERATED_THINKING_MARKER = "\u2726 ";
+const DEFAULT_HIDDEN_THINKING_LABEL = "Thinking...";
+
+/**
+ * Stable, non-cryptographic content hash for a thinking block (cyrb53). Used
+ * only as a cache key for generated summaries, so a hash collision would show
+ * the wrong summary, never change what a block says.
+ */
+export function thinkingContentHash(text: string): string {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text.charCodeAt(i);
+		h1 = Math.imul(h1 ^ ch, 2654435761);
+		h2 = Math.imul(h2 ^ ch, 1597334677);
+	}
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Flattens the first `maxLines` non-blank lines of a thinking block onto one
+ * row, trimmed to `maxChars` as a backstop and marked with an ellipsis when
+ * that fires. Returns an empty string when the block has no visible text, so
+ * the caller can fall back to its own label.
+ */
+function previewThinkingText(
+	text: string,
+	maxLines = DEFAULT_THINKING_PREVIEW_LINES,
+	maxChars = DEFAULT_THINKING_PREVIEW_CHARS,
+): string {
+	// Never scan all of a still-growing block: this runs per streamed token.
+	const scanLimit = Math.max(4096, maxChars * 2);
+	const lines = text
+		.slice(0, scanLimit)
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (lines.length === 0) return "";
+	const joined = lines.slice(0, maxLines).join(THINKING_PREVIEW_SEPARATOR);
+	if (joined.length <= maxChars) return joined;
+	return joined.slice(0, Math.max(0, maxChars - 1)).trimEnd() + THINKING_PREVIEW_ELLIPSIS;
+}
+
+/**
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
-	private hiddenThinkingLabel: string;
+	private hiddenThinkingLabel: string | undefined;
+	private thinkingSummaryProvider: ThinkingSummaryProvider | undefined;
 	private outputPad: number;
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private lastMessage?: AssistantMessage;
@@ -27,15 +84,17 @@ export class AssistantMessageComponent extends Container {
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
-		hiddenThinkingLabel = "Thinking...",
+		hiddenThinkingLabel: string | undefined = undefined,
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		thinkingSummaryProvider: ThinkingSummaryProvider | undefined = undefined,
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
+		this.thinkingSummaryProvider = thinkingSummaryProvider;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
 
@@ -63,11 +122,40 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	setHiddenThinkingLabel(label: string): void {
+	setHiddenThinkingLabel(label?: string): void {
 		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
+	}
+
+	setThinkingSummaryProvider(provider?: ThinkingSummaryProvider): void {
+		this.thinkingSummaryProvider = provider;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	/**
+	 * Resolves the one-line label for a collapsed thinking run: an explicitly
+	 * set label wins, then a summary the extension generated for this exact
+	 * text, then the block's own first lines. Generated text is marked so it is
+	 * never mistaken for the model's words.
+	 */
+	private resolveHiddenThinkingLabel(text: string): string {
+		if (this.hiddenThinkingLabel !== undefined) {
+			return theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel));
+		}
+		// A summary is only meaningful once the block has stopped growing; skip
+		// the provider per streamed token and ask again on the final update.
+		if (!this.isStreaming && this.thinkingSummaryProvider) {
+			const summary = this.thinkingSummaryProvider(thinkingContentHash(text), text);
+			if (summary) {
+				return theme.fg("accent", GENERATED_THINKING_MARKER) + theme.italic(theme.fg("thinkingText", summary));
+			}
+		}
+		const preview = previewThinkingText(text);
+		return theme.italic(theme.fg("thinkingText", preview || DEFAULT_HIDDEN_THINKING_LABEL));
 	}
 
 	setOutputPad(padding: number): void {
@@ -142,7 +230,7 @@ export class AssistantMessageComponent extends Container {
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					? new Text(this.resolveHiddenThinkingLabel(thinkingBlocks.join("\n\n")), this.outputPad, 0)
 					: new Markdown(
 							thinkingBlocks.join("\n\n"),
 							this.outputPad,

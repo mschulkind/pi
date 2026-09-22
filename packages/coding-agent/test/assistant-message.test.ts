@@ -1,7 +1,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
-import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import {
+	AssistantMessageComponent,
+	thinkingContentHash,
+} from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -70,7 +73,7 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		expect(rendered).toContain("private reasoning");
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
@@ -88,22 +91,85 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
+		// One run, one label, derived from both coalesced blocks' text.
+		expect(rendered.match(/first thought/g)).toHaveLength(1);
+		expect(rendered).toContain("first thought \u00b7 second thought");
 		expect(rendered).toContain("answer");
+	});
+
+	test("derives each collapsed thinking label from that run's own text", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "alpha reasoning" },
+				{ type: "text", text: "answer" },
+				{ type: "thinking", thinking: "beta reasoning" },
+			]),
+			true,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		// Two blocks with different text must not render the same label.
+		expect(rendered).toContain("alpha reasoning");
+		expect(rendered).toContain("beta reasoning");
+		expect(rendered).not.toContain("Thinking...");
+	});
+
+	test("a supplied summary wins and is keyed by the block's content hash", () => {
+		initTheme("dark");
+		const calls: Array<{ hash: string; text: string }> = [];
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "first run text" }]),
+			true,
+			undefined,
+			undefined,
+			1,
+			[],
+			(hash, text) => {
+				calls.push({ hash, text });
+				return hash === thinkingContentHash("first run text") ? "Generated conclusion" : undefined;
+			},
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("Generated conclusion");
+		expect(rendered).not.toContain("first run text");
+		expect(calls).toEqual([{ hash: thinkingContentHash("first run text"), text: "first run text" }]);
+	});
+
+	test("marks summary-derived labels as generated and leaves quoted previews unmarked", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "thinking", thinking: "quoted reasoning" }]);
+		const generated = new AssistantMessageComponent(message, true, undefined, undefined, 1, [], () => "summary text");
+		const quoted = new AssistantMessageComponent(message, true);
+
+		expect(stripAnsi(generated.render(80).join("\n"))).toContain("\u2726");
+		expect(stripAnsi(quoted.render(80).join("\n"))).not.toContain("\u2726");
 	});
 
 	test("collapses individual thinking runs when clicked", () => {
 		initTheme("dark");
+		const longReasoning = [
+			"reason one",
+			"reason two",
+			"reason three",
+			"reason four",
+			"reason five",
+			"reason six",
+			"reason seven",
+			"reason eight",
+		].join("\n");
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([
-				{ type: "thinking", thinking: "first reasoning" },
+				{ type: "thinking", thinking: longReasoning },
 				{ type: "text", text: "answer" },
 				{ type: "thinking", thinking: "second reasoning" },
 			]),
 		);
 		const width = 80;
 		const lines = component.render(width);
-		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("first reasoning"));
+		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("reason one"));
 		expect(firstThinkingRow).toBeGreaterThanOrEqual(0);
 		const event: TuiMouseEvent = {
 			type: "click",
@@ -122,8 +188,10 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).not.toContain("first reasoning");
-		expect(collapsed).toContain("Thinking...");
+		// The first run collapses to its own preview (first six lines), not to
+		// the full text and not to a shared label.
+		expect(collapsed).toContain("reason five");
+		expect(collapsed).not.toContain("reason seven");
 		expect(collapsed).toContain("second reasoning");
 	});
 

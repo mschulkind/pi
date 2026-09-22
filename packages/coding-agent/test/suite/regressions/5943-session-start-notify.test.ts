@@ -21,6 +21,7 @@ function createUiContext(
 		setWorkingVisible: () => {},
 		setWorkingIndicator: () => {},
 		setHiddenThinkingLabel: () => {},
+		setThinkingSummaryProvider: () => {},
 		setWidget: () => {},
 		setFooter: () => {},
 		setHeader: () => {},
