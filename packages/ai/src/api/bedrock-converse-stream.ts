@@ -56,6 +56,7 @@ import { providerHeadersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { providerUsage } from "../utils/provider-usage.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import {
@@ -714,6 +715,11 @@ function handleMetadata(
 			0,
 		);
 		output.usage.totalTokens = event.usage.totalTokens || output.usage.input + output.usage.output;
+		output.usage.provider = providerUsage({
+			cachedTokens: event.usage.cacheReadInputTokens,
+			cacheWriteTokens: event.usage.cacheWriteInputTokens,
+			raw: event.usage,
+		});
 		calculateCost(model, output.usage);
 	}
 }

@@ -27,6 +27,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { providerUsage } from "../utils/provider-usage.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
@@ -246,6 +247,10 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						cacheWrite: 0,
 						reasoning: chunk.usageMetadata.thoughtsTokenCount || 0,
 						totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+						provider: providerUsage({
+							cachedTokens: chunk.usageMetadata.cachedContentTokenCount,
+							raw: chunk.usageMetadata,
+						}),
 						cost: {
 							input: 0,
 							output: 0,

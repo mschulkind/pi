@@ -393,6 +393,19 @@ export interface ToolCall {
 	namespace?: string;
 }
 
+/**
+ * Provider-reported usage, verbatim, for values pi normally folds into its own
+ * normalized view. A property is present only when the provider actually
+ * reported it: an absent key means "not reported", which is deliberately
+ * distinct from a reported zero. `raw` is the untouched provider usage object
+ * when the adapter has one to preserve.
+ */
+export interface ProviderUsage {
+	cachedTokens?: number;
+	cacheWriteTokens?: number;
+	raw?: JsonValue;
+}
+
 export interface Usage {
 	input: number;
 	output: number;
@@ -407,6 +420,12 @@ export interface Usage {
 	 */
 	reasoning?: number;
 	totalTokens: number;
+	/**
+	 * Provider-reported numbers for the cached split pi maps into `cacheRead` and
+	 * `cacheWrite`, plus the untouched raw usage object when available. Additive:
+	 * it does not change the meaning of any field above.
+	 */
+	provider?: ProviderUsage;
 	cost: {
 		input: number;
 		output: number;

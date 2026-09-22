@@ -18,6 +18,7 @@ import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
+import { providerUsage } from "../utils/provider-usage.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import { getCurrentTools, resolveTranscript } from "../utils/transcript.ts";
@@ -533,7 +534,7 @@ function shouldUsePromptCaching(options?: MistralOptions): options is MistralOpt
 	return options?.cacheRetention !== "none" && !!options?.sessionId;
 }
 
-function getMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
+function getMistralRawCachedPromptTokens(usage: unknown): number | undefined {
 	const rawUsage = usage as {
 		promptTokensDetails?: { cachedTokens?: unknown } | null;
 		prompt_tokens_details?: { cached_tokens?: unknown } | null;
@@ -548,9 +549,12 @@ function getMistralCachedPromptTokens(usage: unknown, promptTokens: number): num
 		rawUsage.promptTokenDetails?.cachedTokens ??
 		rawUsage.prompt_token_details?.cached_tokens ??
 		rawUsage.numCachedTokens ??
-		rawUsage.num_cached_tokens ??
-		0;
-	const cachedTokens = typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : 0;
+		rawUsage.num_cached_tokens;
+	return typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : undefined;
+}
+
+function getMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
+	const cachedTokens = getMistralRawCachedPromptTokens(usage) ?? 0;
 	return Math.min(promptTokens, Math.max(0, cachedTokens));
 }
 
@@ -600,6 +604,10 @@ async function consumeChatStream(
 			output.usage.output = chunk.usage.completion_tokens || 0;
 			output.usage.cacheRead = cachedPromptTokens;
 			output.usage.cacheWrite = 0;
+			output.usage.provider = providerUsage({
+				cachedTokens: getMistralRawCachedPromptTokens(chunk.usage),
+				raw: chunk.usage,
+			});
 			output.usage.totalTokens =
 				chunk.usage.total_tokens ||
 				output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
