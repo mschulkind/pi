@@ -186,6 +186,7 @@ export class AssistantMessageComponent extends Container {
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
 		);
+		const hasVisibleText = message.content.some((c) => c.type === "text" && c.text.trim());
 
 		if (hasVisibleContent) {
 			this.contentContainer.addChild(new Spacer(1));
@@ -284,6 +285,15 @@ export class AssistantMessageComponent extends Container {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+			} else if (message.stopReason === "stop" && !this.isStreaming && !hasVisibleText) {
+				// A completed turn with no text block produced no answer; without a
+				// marker the transcript would end on reasoning and read as a
+				// finished reply. Length, aborted, and error stops have their own
+				// markers above, so this never doubles up.
+				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(
+					new Text(theme.fg("warning", "No answer text was produced for this turn."), this.outputPad, 0),
+				);
 			}
 		}
 	}

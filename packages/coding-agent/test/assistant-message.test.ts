@@ -77,6 +77,73 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
+	test("marks a completed turn that ends on reasoning with no visible text", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], { stopReason: "stop" }),
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("private reasoning");
+		expect(rendered).toContain("No answer text was produced for this turn.");
+	});
+
+	test("does not mark a completed turn that produced visible text", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "private reasoning" },
+				{ type: "text", text: "answer" },
+			]),
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("answer");
+		expect(rendered).not.toContain("No answer text was produced for this turn.");
+	});
+
+	test("uses the length marker instead of the no-answer marker on a length stop", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], { stopReason: "length" }),
+			true,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("Response was truncated before completion.");
+		expect(rendered).not.toContain("No answer text was produced for this turn.");
+	});
+
+	test("does not mark a reasoning-only message while it is still streaming", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }]), true);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).not.toContain("No answer text was produced for this turn.");
+	});
+
+	test("does not mark a turn that is continuing with a tool call", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage(
+				[
+					{ type: "thinking", thinking: "planning" },
+					{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "file.txt" } },
+				],
+				{ stopReason: "toolUse" },
+			),
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).not.toContain("No answer text was produced for this turn.");
+	});
+
 	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
 		initTheme("dark");
 
