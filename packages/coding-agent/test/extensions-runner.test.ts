@@ -1122,6 +1122,62 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("UI prompts from Pi itself", () => {
+		it("emits one start/end pair around a core prompt, including nested extension prompts", async () => {
+			const events: string[] = [];
+			const runtime = createExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					pi.on("ui_prompt_start", (event) => {
+						events.push(`start:${event.kind}:${event.title}`);
+					});
+					pi.on("ui_prompt_end", (event) => {
+						events.push(`end:${event.kind}:${event.title}`);
+					});
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+
+			await runner.withUIPrompt("confirm", "Needs approval", async () => {
+				await runner.withUIPrompt("select", "Nested selector", async () => true);
+				await new Promise<void>((resolve) => setTimeout(resolve, 0));
+				expect(events).toEqual(["start:confirm:Needs approval"]);
+			});
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			expect(events).toEqual(["start:confirm:Needs approval", "end:confirm:Needs approval"]);
+		});
+
+		it("ends a failed core prompt so a later one can ring", async () => {
+			const events: string[] = [];
+			const runtime = createExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					pi.on("ui_prompt_start", () => {
+						events.push("start");
+					});
+					pi.on("ui_prompt_end", () => {
+						events.push("end");
+					});
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+			await expect(
+				runner.withUIPrompt("input", "Code", async () => {
+					throw new Error("cancelled");
+				}),
+			).rejects.toThrow("cancelled");
+			await runner.withUIPrompt("input", "Code", async () => "ok");
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			expect(events).toEqual(["start", "end", "start", "end"]);
+		});
+	});
+
 	describe("provider registration", () => {
 		it("bindCore ignores invalid queued registrations and reports extension error", async () => {
 			const runtime = createExtensionRuntime();

@@ -2610,40 +2610,45 @@ export class InteractiveMode {
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
+		if (opts?.signal?.aborted) return Promise.resolve(undefined);
+		return this.session.extensionRunner.withUIPrompt(
+			"select",
+			title,
+			() =>
+				new Promise((resolve) => {
+					const onAbort = () => {
+						this.hideExtensionSelector();
+						resolve(undefined);
+					};
+					opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			const onAbort = () => {
-				this.hideExtensionSelector();
-				resolve(undefined);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+					this.extensionSelector = new ExtensionSelectorComponent(
+						title,
+						options,
+						(option) => {
+							opts?.signal?.removeEventListener("abort", onAbort);
+							this.hideExtensionSelector();
+							resolve(option);
+						},
+						() => {
+							opts?.signal?.removeEventListener("abort", onAbort);
+							this.hideExtensionSelector();
+							resolve(undefined);
+						},
+						{
+							tui: this.ui,
+							timeout: opts?.timeout,
+							onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+						},
+					);
 
-			this.extensionSelector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(option);
-				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
-			);
-
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			this.ui.requestRender();
-		});
+					this.disposeActiveSelector();
+					this.editorContainer.clear();
+					this.editorContainer.addChild(this.extensionSelector);
+					this.ui.setFocus(this.extensionSelector);
+					this.ui.requestRender();
+				}),
+		);
 	}
 
 	/**
@@ -2666,8 +2671,11 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
-		return result === "Yes";
+		if (opts?.signal?.aborted) return false;
+		return this.session.extensionRunner.withUIPrompt("confirm", title, async () => {
+			const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
+			return result === "Yes";
+		});
 	}
 
 	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
@@ -2738,30 +2746,35 @@ export class InteractiveMode {
 	 * Show a multi-line editor for extensions (with Ctrl+G support).
 	 */
 	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
-		return new Promise((resolve) => {
-			this.extensionEditor = new ExtensionEditorComponent(
-				this.ui,
-				this.keybindings,
-				title,
-				prefill,
-				(value) => {
-					this.hideExtensionEditor();
-					resolve(value);
-				},
-				() => {
-					this.hideExtensionEditor();
-					resolve(undefined);
-				},
-				undefined,
-				this.settingsManager.getExternalEditorCommand(),
-			);
+		return this.session.extensionRunner.withUIPrompt(
+			"editor",
+			title,
+			() =>
+				new Promise((resolve) => {
+					this.extensionEditor = new ExtensionEditorComponent(
+						this.ui,
+						this.keybindings,
+						title,
+						prefill,
+						(value) => {
+							this.hideExtensionEditor();
+							resolve(value);
+						},
+						() => {
+							this.hideExtensionEditor();
+							resolve(undefined);
+						},
+						undefined,
+						this.settingsManager.getExternalEditorCommand(),
+					);
 
-			this.disposeActiveSelector();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
-			this.ui.setFocus(this.extensionEditor);
-			this.ui.requestRender();
-		});
+					this.disposeActiveSelector();
+					this.editorContainer.clear();
+					this.editorContainer.addChild(this.extensionEditor);
+					this.ui.setFocus(this.extensionEditor);
+					this.ui.requestRender();
+				}),
+		);
 	}
 
 	/**
@@ -6100,27 +6113,33 @@ export class InteractiveMode {
 	}
 
 	private async showAuthPrompt(dialog: LoginDialogComponent, prompt: AuthPrompt): Promise<string> {
-		let response: Promise<string>;
-		if (prompt.type === "select") {
-			response = this.showAuthSelect(dialog, prompt);
-		} else if (prompt.type === "manual_code") {
-			response = dialog.showManualInput(prompt.message);
-		} else {
-			response = dialog.showPrompt(prompt.message, prompt.placeholder);
-		}
-		if (!prompt.signal) return response;
-		if (prompt.signal.aborted) throw new Error("Login cancelled");
-		const signal = prompt.signal;
-		let onAbort: (() => void) | undefined;
-		const aborted = new Promise<string>((_resolve, reject) => {
-			onAbort = () => reject(new Error("Login cancelled"));
-			signal.addEventListener("abort", onAbort, { once: true });
-		});
-		try {
-			return await Promise.race([response, aborted]);
-		} finally {
-			if (onAbort) signal.removeEventListener("abort", onAbort);
-		}
+		if (prompt.signal?.aborted) throw new Error("Login cancelled");
+		return this.session.extensionRunner.withUIPrompt(
+			prompt.type === "select" ? "select" : "input",
+			prompt.message,
+			async () => {
+				let response: Promise<string>;
+				if (prompt.type === "select") {
+					response = this.showAuthSelect(dialog, prompt);
+				} else if (prompt.type === "manual_code") {
+					response = dialog.showManualInput(prompt.message);
+				} else {
+					response = dialog.showPrompt(prompt.message, prompt.placeholder);
+				}
+				if (!prompt.signal) return response;
+				const signal = prompt.signal;
+				let onAbort: (() => void) | undefined;
+				const aborted = new Promise<string>((_resolve, reject) => {
+					onAbort = () => reject(new Error("Login cancelled"));
+					signal.addEventListener("abort", onAbort, { once: true });
+				});
+				try {
+					return await Promise.race([response, aborted]);
+				} finally {
+					if (onAbort) signal.removeEventListener("abort", onAbort);
+				}
+			},
+		);
 	}
 
 	private notifyAuthDialog(dialog: LoginDialogComponent, event: AuthEvent): void {
