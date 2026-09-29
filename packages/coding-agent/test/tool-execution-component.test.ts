@@ -114,6 +114,57 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("custom result");
 	});
 
+	test("inline shell combines short call and result but retains expanded and narrow results", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "inline",
+			renderCall: () => new Text("run task", 0, 0),
+			renderResult: (_result, { expanded }) => new Text(expanded ? "done\nfull output" : "done", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-inline",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false });
+		expect(stripAnsi(component.render(80).join("\n"))).toBe("\nrun task · done");
+		expect(
+			stripAnsi(component.render(10).join("\n"))
+				.split("\n")
+				.map((line) => line.trimEnd()),
+		).toEqual(["", "run task", "done"]);
+		component.setExpanded(true);
+		expect(
+			stripAnsi(component.render(80).join("\n"))
+				.split("\n")
+				.map((line) => line.trimEnd()),
+		).toEqual(["", "run task", "done", "full output"]);
+	});
+
+	test("inline shell preserves colored labels when joining padded terminal rows", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "inline",
+			renderCall: () => new Text(theme.fg("accent", "call"), 0, 0),
+			renderResult: () => new Text(theme.fg("success", "done"), 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-inline-color",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [], details: {}, isError: false });
+		expect(stripAnsi(component.render(80).join("\n"))).toBe("\ncall · done");
+	});
+
 	test("self-rendered empty tool rows take no layout space", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),

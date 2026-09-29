@@ -10,6 +10,7 @@ import {
 	Text,
 	type TUI,
 	type TuiMouseEvent,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
 import type { Theme } from "../theme/theme.ts";
@@ -22,7 +23,7 @@ import type { Theme } from "../theme/theme.ts";
  * narrowing them here would make those definitions unassignable.
  */
 export interface ToolRenderers {
-	renderShell?: "default" | "self";
+	renderShell?: "default" | "self" | "inline";
 	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
 	renderResult?: (
 		result: AgentToolResult<any>,
@@ -108,7 +109,7 @@ export class ToolExecutionComponent extends Container {
 		this.selfRenderContainer = new Container();
 
 		if (this.hasRendererDefinition()) {
-			this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
+			this.addChild(this.getRenderShell() !== "default" ? this.selfRenderContainer : this.contentBox);
 		} else {
 			this.addChild(this.contentTextRegion);
 		}
@@ -128,7 +129,7 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition !== undefined;
 	}
 
-	private getRenderShell(): "default" | "self" {
+	private getRenderShell(): "default" | "self" | "inline" {
 		return this.toolDefinition?.renderShell ?? "default";
 	}
 
@@ -266,8 +267,20 @@ export class ToolExecutionComponent extends Container {
 			return [];
 		}
 
-		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
-			const contentLines = this.selfRenderContainer.render(width);
+		if (this.hasRendererDefinition() && this.getRenderShell() !== "default") {
+			let contentLines = this.selfRenderContainer.render(width);
+			// Only merge one-line call/result pairs that fit. Expanded, wrapped and
+			// image-bearing results keep their original layout and click regions.
+			if (
+				this.getRenderShell() === "inline" &&
+				this.result &&
+				!this.expanded &&
+				contentLines.length === 2 &&
+				this.imageComponents.length === 0
+			) {
+				const joined = `${contentLines[0]?.trimEnd()} · ${contentLines[1]?.trimEnd()}`;
+				if (visibleWidth(joined) <= width) contentLines = [joined];
+			}
 			this.selfRenderHeight = contentLines.length;
 			if (contentLines.length === 0 && this.imageComponents.length === 0) {
 				return [];
@@ -295,7 +308,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
-		if (!this.hasRendererDefinition() || this.getRenderShell() !== "self") return super.handleMouse(event);
+		if (!this.hasRendererDefinition() || this.getRenderShell() === "default") return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
 		return this.selfRenderContainer.handleMouse({
 			...event,
@@ -314,7 +327,7 @@ export class ToolExecutionComponent extends Container {
 		let hasContent = false;
 		this.hideComponent = false;
 		if (this.hasRendererDefinition()) {
-			const renderContainer = this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox;
+			const renderContainer = this.getRenderShell() !== "default" ? this.selfRenderContainer : this.contentBox;
 			if (renderContainer instanceof Box) {
 				renderContainer.setBgFn(bgFn);
 			}
