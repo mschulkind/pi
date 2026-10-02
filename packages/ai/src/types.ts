@@ -8,6 +8,7 @@ import type { MistralOptions } from "./api/mistral-conversations.ts";
 import type { OpenAICodexResponsesOptions } from "./api/openai-codex-responses.ts";
 import type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
+import type { PerformanceRecordingOptions } from "./api/performance.ts";
 import type { PiMessagesOptions } from "./api/pi-messages.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
@@ -133,6 +134,10 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	signal?: AbortSignal;
 	/** Explicit parent context for telemetry produced by this logical request. */
 	telemetryContext?: TelemetryContext;
+	/** Opt-in local-only API attempt recording, separate from exported telemetry. */
+	performance?: PerformanceRecordingOptions;
+	/** Local observation identity, independent of provider routing ids. */
+	performanceCorrelation?: Omit<PerformanceRecordingOptions, "record">;
 	apiKey?: string;
 	/**
 	 * Optional fetch implementation for provider HTTP requests.

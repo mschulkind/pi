@@ -349,6 +349,12 @@ export async function generateBugReportSummary(options: GenerateBugReportSummary
 		headers: options.headers,
 		env: options.env,
 		sessionId: options.sessionId,
+		performanceCorrelation: {
+			sessionId: options.sessionId,
+			operationId: globalThis.crypto.randomUUID(),
+			logicalRequestId: globalThis.crypto.randomUUID(),
+			purpose: "bug_report_summary",
+		},
 		...(model.reasoning && options.thinkingLevel && options.thinkingLevel !== "off"
 			? { reasoning: options.thinkingLevel }
 			: {}),

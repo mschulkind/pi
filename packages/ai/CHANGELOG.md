@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added opt-in local performance observations for HTTP streaming attempts in OpenAI Completions, OpenAI Responses, Azure Responses, and Pi Messages, including failed transport attempts and provider retries. Other transports are not yet instrumented.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added

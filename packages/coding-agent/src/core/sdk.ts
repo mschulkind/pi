@@ -12,6 +12,7 @@ import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefi
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+import { PerformanceCorrelationState } from "./performance-correlation.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
@@ -313,6 +314,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		() => settingsManager.getCacheWarmingMode(),
 		async (event) => extensionRunnerRef.current?.emitCacheWarmingDecision(event) ?? event.action,
 	);
+	const performanceCorrelation = new PerformanceCorrelationState();
 	const buildRequestOptions = (
 		requestModel: Model<any>,
 		options: ModelsSimpleStreamOptions = {},
@@ -395,6 +397,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const requestOptions = buildRequestOptions(model, options);
+			requestOptions.performanceCorrelation = {
+				...performanceCorrelation.correlation,
+				...requestOptions.performanceCorrelation,
+				// The owning session is not a summary-specific provider routing id.
+				sessionId: sessionManager.getSessionId(),
+			};
+			requestOptions.performance ??= modelRuntime.getPerformanceRecordingOptions(
+				requestOptions.performanceCorrelation,
+			);
 			// Compaction and summaries use their own routing ids; only session requests
 			// replace the cache entry, so warming restarts from them. Keep warming while
 			// the current transcript still extends the request's prefix. Agent state may
@@ -452,6 +463,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionStartEvent: options.sessionStartEvent,
 	});
 
+	session.subscribe((event) => performanceCorrelation.observe(event));
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

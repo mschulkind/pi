@@ -124,6 +124,37 @@ const current = () => true;
 afterEach(() => vi.useRealTimers());
 
 describe("cache warming", () => {
+	it("allocates a distinct performance request for every refresh instead of replaying the assistant identity", async () => {
+		vi.useFakeTimers();
+		const { warmer, calls } = fakeRuntime();
+		const record = () => {};
+		warmer.start(
+			request(adaptiveModel, {
+				performance: {
+					record,
+					sessionId: "actual-session",
+					logicalRequestId: "assistant-request",
+					operationId: "operation",
+				},
+			}),
+			current,
+		);
+		await vi.advanceTimersByTimeAsync(270_000);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(calls).toHaveLength(2);
+		for (const call of calls) {
+			expect(call.options?.performance).toMatchObject({
+				record,
+				sessionId: "actual-session",
+				operationId: "operation",
+				purpose: "cache_warm",
+			});
+			expect(call.options?.performance?.logicalRequestId).not.toBe("assistant-request");
+		}
+		expect(calls[0].options?.performance?.logicalRequestId).not.toBe(calls[1].options?.performance?.logicalRequestId);
+		warmer.cancel();
+	});
+
 	it("derives eligibility and timing from retention and provider behavior", () => {
 		expect([
 			getPromptCacheTtlMs(adaptiveModel, undefined),

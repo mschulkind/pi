@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in local API performance files through `PI_API_PERFORMANCE_DIR`, with private file permissions, bounded scheduled writes, exit draining, inactive-run retention, session/retry correlation, and SDK health counters. Recording covers four HTTP streaming APIs; other transports and auxiliary operations produce explicit coverage notices rather than fabricated attempt counts.
+
 ### Changed
 
 - Collapsed codemode calls use an unboxed inline status showing call counts, output size, model-call cost, and failures. Expand tool output to inspect the script, nested calls, and complete output.

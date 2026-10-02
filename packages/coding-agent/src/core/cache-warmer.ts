@@ -328,10 +328,23 @@ export class CacheWarmer {
 		}
 
 		run.extensionOverride = extensionOverride;
+		const logicalRequestId = globalThis.crypto.randomUUID();
 		try {
 			const message = await this.models
 				.streamSimple(run.model, run.context, {
 					...run.options,
+					performanceCorrelation: {
+						...run.options.performanceCorrelation,
+						logicalRequestId,
+						purpose: "cache_warm",
+					},
+					performance: run.options.performance
+						? {
+								...run.options.performance,
+								logicalRequestId,
+								purpose: "cache_warm",
+							}
+						: undefined,
 					maxTokens: 1,
 					maxRetries: 0,
 					signal: run.controller.signal,

@@ -628,6 +628,11 @@ export async function completeSummarization(
 	// callers without a session ID, including branch summaries, receive a fresh routing ID.
 	const requestOptions: SimpleStreamOptions = {
 		...options,
+		performanceCorrelation: {
+			...options.performanceCorrelation,
+			logicalRequestId: options.performanceCorrelation?.logicalRequestId ?? globalThis.crypto.randomUUID(),
+			purpose: options.performanceCorrelation?.purpose ?? "compaction",
+		},
 		cacheRetention: "none",
 		sessionId: options.sessionId ?? uuidv7(),
 	};

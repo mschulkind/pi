@@ -50,6 +50,7 @@ import {
 	type ModelTypeMap,
 	type MutableModels,
 	normalizeContext,
+	type PerformanceRecordingOptions,
 	type Provider,
 	type ProviderHeaders,
 	type ProviderRequestOptions,
@@ -66,6 +67,11 @@ import {
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
+import {
+	hasPerformanceTransportCoverage,
+	LocalPerformanceRecorder,
+	type PerformanceRecordingHealth,
+} from "./api-performance-recorder.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
@@ -120,6 +126,8 @@ export interface CreateModelRuntimeOptions {
 	signal?: AbortSignal;
 	/** Skip initial catalog and availability refresh. Static models remain available. */
 	refreshOnCreate?: boolean;
+	/** Explicit local-only recording directory; null disables. Defaults to PI_API_PERFORMANCE_DIR, otherwise off. */
+	performanceDirectory?: string | null;
 }
 
 export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
@@ -169,6 +177,7 @@ function mergeHeaders(
 
 /** Configured pi-ai Models collection used by coding-agent and SDK consumers. */
 export class ModelRuntime implements Models {
+	private readonly performanceRecorder: LocalPerformanceRecorder | undefined;
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
@@ -201,7 +210,9 @@ export class ModelRuntime implements Models {
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
 		modelNetworkEnabled: boolean,
+		performanceDirectory: string | undefined,
 	) {
+		this.performanceRecorder = performanceDirectory ? new LocalPerformanceRecorder(performanceDirectory) : undefined;
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
@@ -237,6 +248,9 @@ export class ModelRuntime implements Models {
 			modelsStore,
 			providers,
 			process.env.PI_OFFLINE === undefined,
+			options.performanceDirectory === null
+				? undefined
+				: (options.performanceDirectory ?? process.env.PI_API_PERFORMANCE_DIR),
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
@@ -647,12 +661,34 @@ export class ModelRuntime implements Models {
 		return check ? { configured: true, source: "environment", label: check.source } : { configured: false };
 	}
 
+	/** Health is process-local and deliberately excludes provider errors and credentials. */
+	getPerformanceRecordingHealth(): PerformanceRecordingHealth | undefined {
+		return this.performanceRecorder?.health;
+	}
+
+	flushPerformanceRecords(): Promise<void> {
+		return this.performanceRecorder?.flush() ?? Promise.resolve();
+	}
+
+	getPerformanceRecordingOptions(
+		correlation: Omit<PerformanceRecordingOptions, "record"> = {},
+	): PerformanceRecordingOptions | undefined {
+		return this.performanceRecorder
+			? {
+					...correlation,
+					logicalRequestId: correlation.logicalRequestId ?? globalThis.crypto.randomUUID(),
+					record: this.performanceRecorder.record,
+				}
+			: undefined;
+	}
+
 	private async prepareRequest<
 		TModel extends AnyModel,
 		TOptions extends ProviderRequestOptions<TModel> & ModelsRequestTransforms,
 	>(
 		model: TModel,
 		options: TOptions | undefined,
+		operation: "chat" | "auxiliary" | "deferred" = "chat",
 	): Promise<{
 		provider: Provider;
 		model: TModel;
@@ -669,6 +705,22 @@ export class ModelRuntime implements Models {
 
 		const { transformHeaders, ...rawProviderOptions } = options ?? {};
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
+		const performance =
+			providerOptions.performance ??
+			this.getPerformanceRecordingOptions({
+				purpose: operation === "chat" ? "unknown" : "auxiliary",
+				...providerOptions.performanceCorrelation,
+			});
+		if (performance) {
+			const customStream =
+				this.nativeExtensionProviders.has(model.provider) ||
+				this.extensionProviders.get(model.provider)?.streamSimple;
+			if (operation === "deferred")
+				this.performanceRecorder?.noteUnsupported("deferred_operation", performance, "operation_not_instrumented");
+			else if (!hasPerformanceTransportCoverage(model.api))
+				this.performanceRecorder?.noteUnsupported(model.api, performance);
+			else if (customStream) this.performanceRecorder?.noteUnsupported("custom_provider", performance);
+		}
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
 		const env =
@@ -681,6 +733,7 @@ export class ModelRuntime implements Models {
 			model: requestModel,
 			options: {
 				...providerOptions,
+				performance,
 				apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
 				headers,
 				env,
@@ -751,7 +804,7 @@ export class ModelRuntime implements Models {
 	): AssistantMessageEventStream {
 		return lazyStream(model, async () => {
 			assertChatModel(model);
-			const prepared = await this.prepareRequest(model, options);
+			const prepared = await this.prepareRequest(model, options, "deferred");
 			if (!prepared.provider.fetchDeferred) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 			}
@@ -773,7 +826,7 @@ export class ModelRuntime implements Models {
 		options?: ModelsDeferredCancelOptions,
 	): Promise<void> {
 		assertChatModel(model);
-		const prepared = await this.prepareRequest(model, options);
+		const prepared = await this.prepareRequest(model, options, "deferred");
 		if (!prepared.provider.cancelDeferred) {
 			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 		}
@@ -787,7 +840,7 @@ export class ModelRuntime implements Models {
 	): Promise<AssistantImages> {
 		try {
 			assertImageModel(model);
-			const prepared = await this.prepareRequest(model, options);
+			const prepared = await this.prepareRequest(model, options, "auxiliary");
 			if (!prepared.provider.generateImages) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
@@ -804,7 +857,7 @@ export class ModelRuntime implements Models {
 	): Promise<ClassifierResult> {
 		try {
 			assertClassifierModel(model);
-			const prepared = await this.prepareRequest(model, options);
+			const prepared = await this.prepareRequest(model, options, "auxiliary");
 			if (!prepared.provider.classify) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}

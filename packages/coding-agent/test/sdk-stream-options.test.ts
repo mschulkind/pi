@@ -9,7 +9,7 @@ import {
 	normalizeContext,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
@@ -32,6 +32,7 @@ describe("createAgentSession stream options", () => {
 	});
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -183,6 +184,27 @@ describe("createAgentSession stream options", () => {
 			},
 		};
 	}
+
+	it("uses the owning session identity rather than a summary routing identity for performance recording", async () => {
+		vi.stubEnv("PI_API_PERFORMANCE_DIR", join(tempDir, "performance"));
+		const options = await captureStreamOptions("openai-completions", {}, { sessionId: "summary-routing-id" });
+		expect(options?.performance?.sessionId).toEqual(expect.any(String));
+		expect(options?.performance?.sessionId).not.toBe("summary-routing-id");
+		expect(options?.performance?.logicalRequestId).toEqual(expect.any(String));
+		expect(options?.performance?.purpose).toBe("unknown");
+	});
+
+	it("preserves explicitly supplied performance correlation and never uses general telemetry as a recording sink", async () => {
+		const performance = {
+			record: () => {},
+			sessionId: "explicit",
+			logicalRequestId: "logical",
+			purpose: "compaction" as const,
+		};
+		const options = await captureStreamOptions("openai-completions", {}, { performance });
+		expect(options?.performance).toBe(performance);
+		expect(options?.performance).not.toHaveProperty("localTelemetryContext");
+	});
 
 	it("schedules cache warming after a completed session request", async () => {
 		const fixture = await createCacheWarmingSession();
