@@ -60,8 +60,9 @@ function previewThinkingText(
 		.filter((line) => line.length > 0);
 	if (lines.length === 0) return "";
 	const joined = lines.slice(0, maxLines).join(THINKING_PREVIEW_SEPARATOR);
-	if (joined.length <= maxChars) return joined;
-	return joined.slice(0, Math.max(0, maxChars - 1)).trimEnd() + THINKING_PREVIEW_ELLIPSIS;
+	const truncated = lines.length > maxLines || joined.length > maxChars || text.length > scanLimit;
+	const preview = joined.length > maxChars ? joined.slice(0, Math.max(0, maxChars - 1)).trimEnd() : joined;
+	return preview + (truncated ? THINKING_PREVIEW_ELLIPSIS : "");
 }
 
 /**
@@ -137,25 +138,34 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	/**
-	 * Resolves the one-line label for a collapsed thinking run: an explicitly
+	 * Builds the compact label for a collapsed thinking run: an explicitly
 	 * set label wins, then a summary the extension generated for this exact
 	 * text, then the block's own first lines. Generated text is marked so it is
 	 * never mistaken for the model's words.
 	 */
-	private resolveHiddenThinkingLabel(text: string): string {
+	private createHiddenThinkingComponent(text: string): Text | Markdown {
 		if (this.hiddenThinkingLabel !== undefined) {
-			return theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel));
+			return new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0);
 		}
 		// A summary is only meaningful once the block has stopped growing; skip
 		// the provider per streamed token and ask again on the final update.
 		if (!this.isStreaming && this.thinkingSummaryProvider) {
 			const summary = this.thinkingSummaryProvider(thinkingContentHash(text), text);
 			if (summary) {
-				return theme.fg("accent", GENERATED_THINKING_MARKER) + theme.italic(theme.fg("thinkingText", summary));
+				return new Text(
+					theme.fg("accent", GENERATED_THINKING_MARKER) + theme.italic(theme.fg("thinkingText", summary)),
+					this.outputPad,
+					0,
+				);
 			}
 		}
 		const preview = previewThinkingText(text);
-		return theme.italic(theme.fg("thinkingText", preview || DEFAULT_HIDDEN_THINKING_LABEL));
+		// Quoted previews contain the model's Markdown. Render it like expanded
+		// reasoning, rather than exposing literal formatting markers in a Text row.
+		return new Markdown(preview || DEFAULT_HIDDEN_THINKING_LABEL, this.outputPad, 0, this.markdownTheme, {
+			color: (value: string) => theme.fg("thinkingText", value),
+			italic: true,
+		});
 	}
 
 	setOutputPad(padding: number): void {
@@ -231,7 +241,7 @@ export class AssistantMessageComponent extends Container {
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
 				const thinkingComponent = hidden
-					? new Text(this.resolveHiddenThinkingLabel(thinkingBlocks.join("\n\n")), this.outputPad, 0)
+					? this.createHiddenThinkingComponent(thinkingBlocks.join("\n\n"))
 					: new Markdown(
 							thinkingBlocks.join("\n\n"),
 							this.outputPad,

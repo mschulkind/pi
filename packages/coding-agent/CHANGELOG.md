@@ -6,6 +6,10 @@
 
 - Collapsed codemode calls use an unboxed inline status showing call counts, output size, model-call cost, and failures. Expand tool output to inspect the script, nested calls, and complete output.
 
+### Fixed
+
+- Collapsed reasoning previews render Markdown formatting instead of literal bold/code markers, and mark line-limited previews with an ellipsis. Explicit labels and generated summaries remain plain text.
+
 ## [0.99.1] - 2026-09-29
 
 ### New Features

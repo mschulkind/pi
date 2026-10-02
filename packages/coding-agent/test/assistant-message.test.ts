@@ -6,7 +6,7 @@ import {
 	thinkingContentHash,
 } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -181,6 +181,42 @@ describe("AssistantMessageComponent", () => {
 		expect(rendered).toContain("alpha reasoning");
 		expect(rendered).toContain("beta reasoning");
 		expect(rendered).not.toContain("Thinking...");
+	});
+
+	test("renders Markdown formatting in a collapsed thinking preview", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([
+			{ type: "thinking", thinking: "Check **important** details and `config.ts`." },
+			{ type: "text", text: "answer" },
+		]);
+		// Terminal capability detection can disable Chalk's style output in tests.
+		// Supply a deterministic bold style to verify Markdown applies it in both views.
+		const markdownTheme = { ...getMarkdownTheme(), bold: (text: string) => `\x1b[1m${text}\x1b[22m` };
+		const collapsed = new AssistantMessageComponent(message, true, markdownTheme);
+		const expanded = new AssistantMessageComponent(message, false, markdownTheme);
+		const rendered = stripAnsi(collapsed.render(120).join("\n"));
+		expect(rendered).toContain("Check important details and config.ts.");
+		expect(rendered).not.toContain("**");
+		expect(rendered).not.toContain("`");
+		expect(rendered).toEqual(stripAnsi(expanded.render(120).join("\n")));
+		expect(collapsed.render(120).join("\n")).toContain("\x1b[1m");
+	});
+
+	test("preserves explicit labels and generated summaries as literal text", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "thinking", thinking: "**quoted** reasoning" }]);
+		const explicit = new AssistantMessageComponent(message, true, undefined, "**custom label**");
+		const generated = new AssistantMessageComponent(
+			message,
+			true,
+			undefined,
+			undefined,
+			1,
+			[],
+			() => "literal *summary*",
+		);
+		expect(stripAnsi(explicit.render(80).join("\n"))).toContain("**custom label**");
+		expect(stripAnsi(generated.render(80).join("\n"))).toContain("✦ literal *summary*");
 	});
 
 	test("a supplied summary wins and is keyed by the block's content hash", () => {
