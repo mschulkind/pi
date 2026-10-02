@@ -77,9 +77,12 @@ export interface PerformanceAttemptRecord {
 	purpose: NonNullable<PerformanceRecordingOptions["purpose"]>;
 	provider: string;
 	api: string;
-	transport: "http";
-	streamProtocol: "sse" | "ndjson" | "unknown";
-	attemptKind: "generation";
+	transport: "http" | "websocket";
+	streamProtocol: "sse" | "ndjson" | "websocket_events" | "unknown";
+	attemptKind: "generation" | "connection";
+	/** Socket lifetime identity, not an auth/account/session identifier. Null for HTTP. */
+	websocket: { connectionId: string; reused: boolean; sendAccepted: boolean | null } | null;
+	transportTransition: "pre_start_sse_fallback" | "session_sse_fallback" | null;
 	actualApiHostname: string | null;
 	selectedModel: string | null;
 	requestedModel: string | null;
@@ -97,8 +100,15 @@ export interface PerformanceAttemptRecord {
 		providerTerminalOffsetMs: number | null;
 		completedOffsetMs: number | null;
 		observationClosedOffsetMs: number | null;
-		completionBoundary: "adapter_terminal" | "http_error_headers" | "transport_rejection" | "unknown";
-		observationPoint: "adapter_parsed_event";
+		completionBoundary:
+			| "adapter_terminal"
+			| "http_error_headers"
+			| "transport_rejection"
+			| "connection_open"
+			| "connection_rejection"
+			| "send_rejection"
+			| "unknown";
+		observationPoint: "adapter_parsed_event" | "socket_lifecycle";
 	};
 	effectiveSettings: {
 		reasoningMode: string | null;
@@ -107,6 +117,12 @@ export interface PerformanceAttemptRecord {
 		reasoningDisplay: string | null;
 		outputLimitTokens: number | null;
 		streaming: boolean | null;
+		/** Codex serialized settings only; absent on other APIs. */
+		temperature?: number | null;
+		serviceTier?: "auto" | "default" | "flex" | "priority" | "scale" | null;
+		textVerbosity?: "low" | "medium" | "high" | null;
+		toolChoice?: "auto" | "none" | "required" | null;
+		parallelToolCalls?: boolean | null;
 	};
 	usage: {
 		rawReports: Record<string, unknown>[];
@@ -134,7 +150,7 @@ export interface PerformanceAttemptRecord {
 	};
 	providerMetrics: Record<string, number>;
 	outcome: "success" | "error" | "aborted" | "unknown";
-	failureStage: "transport" | "http_status" | "generation" | "superseded" | null;
+	failureStage: "transport" | "http_status" | "generation" | "superseded" | "connection" | "send" | null;
 	httpStatus: number | null;
 	errorCategory: "transport_error" | "http_error" | "generation_error" | "abort" | "internal_cancellation" | null;
 	retryCause: "previous_attempt_failed" | null;
@@ -239,7 +255,7 @@ function safeUsage(value: unknown, depth = 0): { report: Record<string, unknown>
 	return { report, partial };
 }
 
-function settings(payload: unknown): PerformanceAttemptRecord["effectiveSettings"] {
+function settings(payload: unknown, codex = false): PerformanceAttemptRecord["effectiveSettings"] {
 	const p = object(payload);
 	const reasoning = object(p.reasoning);
 	const thinking = object(p.thinking);
@@ -275,9 +291,39 @@ function settings(payload: unknown): PerformanceAttemptRecord["effectiveSettings
 			"none",
 			"summarized",
 			"omitted",
+			...(codex ? ["off", "on"] : []),
 		]),
 		outputLimitTokens: number(p.max_completion_tokens ?? p.max_output_tokens ?? p.max_tokens ?? pi.maxTokens),
 		streaming: typeof p.stream === "boolean" ? p.stream : null,
+		...(codex
+			? {
+					temperature:
+						typeof p.temperature === "number" &&
+						Number.isFinite(p.temperature) &&
+						p.temperature >= 0 &&
+						p.temperature <= 2
+							? p.temperature
+							: null,
+					serviceTier: knownSetting(p.service_tier, [
+						"auto",
+						"default",
+						"flex",
+						"priority",
+						"scale",
+					]) as PerformanceAttemptRecord["effectiveSettings"]["serviceTier"],
+					toolChoice: knownSetting(p.tool_choice, [
+						"auto",
+						"none",
+						"required",
+					]) as PerformanceAttemptRecord["effectiveSettings"]["toolChoice"],
+					parallelToolCalls: typeof p.parallel_tool_calls === "boolean" ? p.parallel_tool_calls : null,
+					textVerbosity: knownSetting(object(p.text).verbosity, [
+						"low",
+						"medium",
+						"high",
+					]) as PerformanceAttemptRecord["effectiveSettings"]["textVerbosity"],
+				}
+			: {}),
 	};
 }
 
@@ -291,6 +337,7 @@ class Attempt {
 		hostname: string | null,
 		payload: unknown,
 		freshLogicalRequest: boolean,
+		kind: PerformanceAttemptRecord["attemptKind"] = "generation",
 	) {
 		const logicalRequestId = identifier(options.logicalRequestId) ?? globalThis.crypto.randomUUID();
 		const previous = counters.get(logicalRequestId) ?? {
@@ -298,13 +345,15 @@ class Attempt {
 			previous: null,
 			failed: false,
 		};
-		const ordinal = previous.ordinal === null ? null : previous.ordinal + 1;
+		const ordinal = kind === "connection" || previous.ordinal === null ? null : previous.ordinal + 1;
 		const attemptId = globalThis.crypto.randomUUID();
-		counters.delete(logicalRequestId);
-		counters.set(logicalRequestId, { ordinal, previous: attemptId, failed: false });
-		if (counters.size > MAX_CORRELATIONS) {
-			counters.delete(counters.keys().next().value!);
-			correlationHistoryTruncated = true;
+		if (kind === "generation") {
+			counters.delete(logicalRequestId);
+			counters.set(logicalRequestId, { ordinal, previous: attemptId, failed: false });
+			if (counters.size > MAX_CORRELATIONS) {
+				counters.delete(counters.keys().next().value!);
+				correlationHistoryTruncated = true;
+			}
 		}
 		this.record = {
 			schemaVersion: 1,
@@ -314,16 +363,18 @@ class Attempt {
 			operationId: identifier(options.operationId),
 			logicalRequestId,
 			attemptId,
-			previousAttemptId: previous.previous,
+			previousAttemptId: kind === "connection" ? null : previous.previous,
 			attemptOrdinal: ordinal,
 			purpose: options.purpose ?? "unknown",
 			provider: identifier(model.provider) ?? "unknown",
 			api: identifier(model.api) ?? "unknown",
 			transport: "http",
 			streamProtocol: "unknown",
-			attemptKind: "generation",
+			attemptKind: kind,
+			websocket: null,
+			transportTransition: null,
 			actualApiHostname: hostname,
-			selectedModel: identifier(model.id),
+			selectedModel: kind === "connection" ? null : identifier(model.id),
 			requestedModel: identifier(object(payload).model),
 			returnedModel: null,
 			reasoningContentKind: "unknown",
@@ -341,7 +392,7 @@ class Attempt {
 				completionBoundary: "unknown",
 				observationPoint: "adapter_parsed_event",
 			},
-			effectiveSettings: settings(payload),
+			effectiveSettings: settings(payload, kind === "generation" && model.api === "openai-codex-responses"),
 			usage: {
 				rawReports: [],
 				rawReportSources: [],
@@ -364,7 +415,7 @@ class Attempt {
 			failureStage: null,
 			httpStatus: null,
 			errorCategory: null,
-			retryCause: previous.failed ? "previous_attempt_failed" : null,
+			retryCause: kind === "generation" && previous.failed ? "previous_attempt_failed" : null,
 			coverage: {
 				attempts: "transport_invocations",
 				correlation: !identifier(options.sessionId)
@@ -376,7 +427,9 @@ class Attempt {
 					"redirects_and_hidden_proxy_replays_not_observed",
 					"injected_fetch_internal_routing_not_observed",
 					"effective_settings_common_serialized_fields_only",
-					"parsed_events_after_sdk_buffering",
+					model.api === "openai-codex-responses"
+						? "parsed_events_after_sse_buffering"
+						: "parsed_events_after_sdk_buffering",
 					"agent_retry_correlation_requires_explicit_identity",
 					"ordinal_history_bounded_to_1024_logical_requests",
 					"same_length_final_content_replacements_not_detected",
@@ -471,7 +524,9 @@ class Attempt {
 		}
 		if (
 			choice.finish_reason ||
-			["response.completed", "response.incomplete", "response.failed", "done", "error"].includes(String(e.type))
+			["response.completed", "response.done", "response.incomplete", "response.failed", "done", "error"].includes(
+				String(e.type),
+			)
 		) {
 			this.record.timing.providerTerminalOffsetMs ??= eventOffset;
 		}
@@ -557,11 +612,18 @@ class Attempt {
 			if (i.type === "reasoning" && Array.isArray(i.summary))
 				for (const [contentIndex, part] of i.summary.entries())
 					snapshot(`${id}:${contentIndex}:reasoning_summary`, object(part).text, "reasoning");
+			if (i.type === "reasoning" && Array.isArray(i.content))
+				for (const [contentIndex, part] of i.content.entries()) {
+					const p = object(part);
+					if (p.type === "reasoning_text") snapshot(`${id}:${contentIndex}:reasoning`, p.text, "reasoning");
+				}
 		};
 		if (Array.isArray(response.output)) response.output.forEach(observeItem);
 		if (e.item !== undefined) observeItem(e.item, typeof e.output_index === "number" ? e.output_index : 0);
 		if (type === "response.output_text.done" || type === "response.refusal.done" || type === "text_end")
 			snapshot(`${keyBase}:${e.content_index ?? 0}:text`, e.text ?? e.refusal ?? e.content, "text");
+		if (type === "response.function_call_arguments.done" || type === "response.custom_tool_call_input.done")
+			snapshot(`${keyBase}:0:tool`, e.arguments ?? e.input, "tool");
 		if (type === "thinking_end" && e.redacted !== true) snapshot(`${keyBase}:0:reasoning`, e.content, "reasoning");
 		if (type === "toolcall_end" && object(e.toolCall).arguments !== undefined)
 			snapshot(`${keyBase}:0:tool`, JSON.stringify(object(e.toolCall).arguments), "tool");
@@ -605,7 +667,7 @@ class Attempt {
 			outcome === "aborted"
 				? "abort"
 				: outcome === "error"
-					? stage === "transport"
+					? stage === "transport" || stage === "connection" || stage === "send"
 						? "transport_error"
 						: stage === "http_status"
 							? "http_error"
@@ -621,9 +683,15 @@ class Attempt {
 				? "unknown"
 				: stage === "http_status"
 					? "http_error_headers"
-					: stage === "transport"
-						? "transport_rejection"
-						: "adapter_terminal";
+					: stage === "connection"
+						? "connection_rejection"
+						: stage === "send"
+							? "send_rejection"
+							: stage === "transport"
+								? "transport_rejection"
+								: this.record.attemptKind === "connection"
+									? "connection_open"
+									: "adapter_terminal";
 		if (stage === "http_status") this.record.coverage.limitations.push("http_error_body_not_observed");
 		if (stage === "superseded")
 			this.record.coverage.limitations.push("overlapping_successful_fetches_not_correlated");
@@ -635,19 +703,85 @@ class Attempt {
 	}
 }
 
-/** Instruments actual injected fetch invocations, not outer SDK calls. Streaming completion comes from the adapter. */
-export function createPerformanceRequest<T extends StreamOptions>(
+export interface PerformanceTransportObserver {
+	beginConnection(
+		url: string,
+	): { connectionId: string; finish(outcome: "success" | "error" | "aborted"): void } | undefined;
+	beginSend(hostname: string, payload: unknown, connectionId: string, reused: boolean): void;
+	sendAccepted(): void;
+	fail(stage: "send" | "transport" | "generation"): void;
+	fallback(sessionActive?: boolean): void;
+}
+
+/** Shared observer for actual fetch, socket construction, and generation sends. No transport is replaced. */
+export function createPerformanceTransportRequest<T extends StreamOptions>(
 	model: BaseModel<string>,
 	options: T | undefined,
 	stream: AssistantMessageEventStream,
-): T | undefined {
-	if (!options?.performance) return options;
+	serializedHttpPayload?: () => unknown,
+): { options: T | undefined; observer: PerformanceTransportObserver | undefined } {
+	if (!options?.performance) return { options, observer: undefined };
 	const recording = {
 		...options.performance,
 		logicalRequestId: identifier(options.performance.logicalRequestId) ?? globalThis.crypto.randomUUID(),
 	};
 	const fetch = options.fetch ?? globalThis.fetch;
 	let active: Attempt | undefined;
+	let transition: PerformanceAttemptRecord["transportTransition"] = null;
+	const fresh = !identifier(options.performance.logicalRequestId);
+	const observer: PerformanceTransportObserver = {
+		beginConnection(url) {
+			try {
+				const attempt = new Attempt(model, recording, new URL(url).hostname, undefined, fresh, "connection");
+				attempt.record.transport = "websocket";
+				attempt.record.timing.observationPoint = "socket_lifecycle";
+				const connectionId = globalThis.crypto.randomUUID();
+				attempt.record.websocket = { connectionId, reused: false, sendAccepted: null };
+				attempt.record.coverage.limitations = [
+					"connection_is_not_generation",
+					"unfinished_attempt_recovery_not_implemented",
+				];
+				return {
+					connectionId,
+					finish(outcome) {
+						attempt.finish(recording, outcome, outcome === "success" ? null : "connection");
+					},
+				};
+			} catch {
+				return undefined;
+			}
+		},
+		beginSend(hostname, payload, connectionId, reused) {
+			try {
+				active = new Attempt(model, recording, hostname, payload, fresh);
+				active.record.transport = "websocket";
+				active.record.streamProtocol = "websocket_events";
+				active.record.websocket = { connectionId, reused, sendAccepted: false };
+				active.record.coverage.limitations = active.record.coverage.limitations.filter(
+					(value) =>
+						value !== "injected_fetch_internal_routing_not_observed" &&
+						value !== "parsed_events_after_sse_buffering" &&
+						value !== "parsed_events_after_sdk_buffering",
+				);
+				active.record.coverage.limitations.push(
+					"websocket_send_acceptance_is_not_provider_receipt",
+					"parsed_events_after_socket_queueing",
+				);
+			} catch {
+				/* Recording cannot prevent a send. */
+			}
+		},
+		sendAccepted() {
+			if (active?.record.websocket) active.record.websocket.sendAccepted = true;
+		},
+		fail(stage) {
+			active?.finish(recording, options.signal?.aborted ? "aborted" : "error", stage);
+			active = undefined;
+		},
+		fallback(sessionActive) {
+			transition = sessionActive ? "session_sse_fallback" : "pre_start_sse_fallback";
+		},
+	};
 	const originalPush = stream.push.bind(stream);
 	stream.push = (event: AssistantMessageEvent) => {
 		if (event.type === "done" || event.type === "error") {
@@ -661,55 +795,71 @@ export function createPerformanceRequest<T extends StreamOptions>(
 		originalPush(event);
 	};
 	return {
-		...options,
-		fetch: async (input, init) => {
-			let hostname: string | null = null;
-			let payload: unknown;
-			try {
-				hostname = new URL(input instanceof Request ? input.url : String(input)).hostname;
-				if (typeof init?.body === "string") payload = JSON.parse(init.body);
-			} catch {
-				/* Missing metadata remains unknown. */
-			}
-			if (active) active.finish(recording, "unknown", "superseded");
-			const attempt = new Attempt(
-				model,
-				recording,
-				hostname,
-				payload,
-				!identifier(options.performance?.logicalRequestId),
-			);
-			active = attempt;
-			try {
-				const response = await fetch(input, init);
-				attempt.record.httpStatus = response.status;
-				const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-				attempt.record.streamProtocol = contentType.includes("text/event-stream")
-					? "sse"
-					: contentType.includes("ndjson")
-						? "ndjson"
-						: "unknown";
-				attempt.record.timing.headersOffsetMs = performance.now() - attempt.record.timing.startedAtMonotonicMs;
-				if (!response.ok) {
-					attempt.finish(recording, "error", "http_status");
-					if (active === attempt) active = undefined;
+		observer,
+		options: {
+			...options,
+			fetch: async (input, init) => {
+				let hostname: string | null = null;
+				let payload: unknown;
+				try {
+					hostname = new URL(input instanceof Request ? input.url : String(input)).hostname;
+					if (serializedHttpPayload) payload = serializedHttpPayload();
+					else if (typeof init?.body === "string") payload = JSON.parse(init.body);
+				} catch {
+					/* Missing metadata remains unknown. */
 				}
-				return response;
-			} catch (error) {
-				if (!options.signal?.aborted && init?.signal?.aborted)
-					attempt.record.errorCategory = "internal_cancellation";
-				attempt.finish(recording, options.signal?.aborted ? "aborted" : "error", "transport");
-				if (active === attempt) active = undefined;
-				throw error;
-			}
-		},
-		onProviderStreamEvent: async (event, eventModel) => {
-			try {
-				active?.observe(event);
-			} catch {
-				/* An observer cannot affect parsing. */
-			}
-			await options.onProviderStreamEvent?.(event, eventModel);
+				let attempt: Attempt | undefined;
+				try {
+					if (active) active.finish(recording, "unknown", "superseded");
+					active = undefined;
+					attempt = new Attempt(model, recording, hostname, payload, fresh);
+					attempt.record.transportTransition = transition;
+					active = attempt;
+				} catch {
+					/* A failed observation must not prevent the actual fetch or fabricate an attempt. */
+					active = undefined;
+				}
+				if (!attempt) return fetch(input, init);
+				try {
+					const response = await fetch(input, init);
+					attempt.record.httpStatus = response.status;
+					const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+					attempt.record.streamProtocol = contentType.includes("text/event-stream")
+						? "sse"
+						: contentType.includes("ndjson")
+							? "ndjson"
+							: "unknown";
+					attempt.record.timing.headersOffsetMs = performance.now() - attempt.record.timing.startedAtMonotonicMs;
+					if (!response.ok) {
+						attempt.finish(recording, "error", "http_status");
+						if (active === attempt) active = undefined;
+					}
+					return response;
+				} catch (error) {
+					if (!options.signal?.aborted && init?.signal?.aborted)
+						attempt.record.errorCategory = "internal_cancellation";
+					attempt.finish(recording, options.signal?.aborted ? "aborted" : "error", "transport");
+					if (active === attempt) active = undefined;
+					throw error;
+				}
+			},
+			onProviderStreamEvent: async (event, eventModel) => {
+				try {
+					active?.observe(event);
+				} catch {
+					/* An observer cannot affect parsing. */
+				}
+				await options.onProviderStreamEvent?.(event, eventModel);
+			},
 		},
 	};
+}
+
+/** Instruments actual injected fetch invocations, not outer SDK calls. Streaming completion comes from the adapter. */
+export function createPerformanceRequest<T extends StreamOptions>(
+	model: BaseModel<string>,
+	options: T | undefined,
+	stream: AssistantMessageEventStream,
+): T | undefined {
+	return createPerformanceTransportRequest(model, options, stream).options;
 }

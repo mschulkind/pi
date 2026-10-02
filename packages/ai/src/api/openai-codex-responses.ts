@@ -43,6 +43,7 @@ import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import { createPerformanceTransportRequest, type PerformanceTransportObserver } from "./performance.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 // ============================================================================
@@ -240,6 +241,12 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 	options?: OpenAICodexResponsesOptions,
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
+	let serializedHttpBody: string | undefined;
+	const performanceRequest = createPerformanceTransportRequest(model, options, stream, () =>
+		serializedHttpBody === undefined ? undefined : JSON.parse(serializedHttpBody),
+	);
+	options = performanceRequest.options;
+	const observer = performanceRequest.observer;
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
@@ -289,12 +296,14 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				websocketRequestId,
 			);
 			const bodyJson = JSON.stringify(body);
+			if (observer) serializedHttpBody = bodyJson;
 			const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
 			const websocketConnectTimeoutMs = normalizeTimeoutMs(options?.websocketConnectTimeoutMs);
 			const transport = options?.transport || "auto";
 			let startEmitted = false;
 			const websocketDisabledForSession = transport !== "sse" && isWebSocketSseFallbackActive(cacheSessionId);
 			if (websocketDisabledForSession) {
+				observer?.fallback(true);
 				recordWebSocketSseFallback(cacheSessionId);
 			}
 
@@ -325,6 +334,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							accountId,
 							grammarToolInputProperties,
 							options,
+							observer,
 						);
 
 						if (options?.signal?.aborted) {
@@ -367,6 +377,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						if (websocketStarted) {
 							throw error;
 						}
+						observer?.fallback();
 						recordWebSocketSseFallback(cacheSessionId);
 						break;
 					}
@@ -907,6 +918,8 @@ export interface OpenAICodexWebSocketDebugStats {
 	lastWebSocketError?: string;
 }
 
+// Local random socket identity only; never derived from account credentials or routing keys.
+const websocketPerformanceConnections = new WeakMap<WebSocketLike, { connectionId?: string; hostname: string }>();
 const websocketSessionCache = new Map<string, Map<string, CachedWebSocketConnection>>();
 const websocketDebugStats = new Map<string, OpenAICodexWebSocketDebugStats>();
 const websocketSseFallbackSessions = new Set<string>();
@@ -1078,6 +1091,7 @@ async function connectWebSocket(
 	signal?: AbortSignal,
 	connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS,
 	env?: ProviderEnv,
+	observer?: PerformanceTransportObserver,
 ): Promise<WebSocketLike> {
 	const WebSocketCtor = await getWebSocketConstructor(env);
 	if (!WebSocketCtor) {
@@ -1091,10 +1105,16 @@ async function connectWebSocket(
 		let settled = false;
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		let socket: WebSocketLike;
+		const connection = observer?.beginConnection(url);
 
 		try {
 			socket = new WebSocketCtor(url, { headers: wsHeaders });
+			websocketPerformanceConnections.set(socket, {
+				connectionId: connection?.connectionId,
+				hostname: new URL(url).hostname,
+			});
 		} catch (error) {
+			connection?.finish(signal?.aborted ? "aborted" : "error");
 			reject(error instanceof Error ? error : new Error(String(error)));
 			return;
 		}
@@ -1116,12 +1136,14 @@ async function connectWebSocket(
 			if (closeReason) {
 				closeWebSocketSilently(socket, 1000, closeReason);
 			}
+			connection?.finish(signal?.aborted ? "aborted" : "error");
 			reject(error);
 		};
 		const onOpen: WebSocketListener = () => {
 			if (settled) return;
 			settled = true;
 			cleanup();
+			connection?.finish("success");
 			resolve(socket);
 		};
 		const onError: WebSocketListener = (event) => {
@@ -1158,6 +1180,7 @@ async function acquireWebSocket(
 	signal?: AbortSignal,
 	connectTimeoutMs?: number,
 	env?: ProviderEnv,
+	observer?: PerformanceTransportObserver,
 ): Promise<{
 	socket: WebSocketLike;
 	entry?: CachedWebSocketConnection;
@@ -1165,7 +1188,7 @@ async function acquireWebSocket(
 	release: (options?: { keep?: boolean }) => void;
 }> {
 	if (!sessionId) {
-		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
+		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, observer);
 		return {
 			socket,
 			reused: false,
@@ -1204,7 +1227,7 @@ async function acquireWebSocket(
 			};
 		}
 		if (cached.busy) {
-			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
+			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, observer);
 			return {
 				socket,
 				reused: false,
@@ -1220,7 +1243,7 @@ async function acquireWebSocket(
 		}
 	}
 
-	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
+	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, observer);
 	const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
 	accountEntries = websocketSessionCache.get(sessionId);
 	if (!accountEntries) {
@@ -1504,6 +1527,7 @@ async function processWebSocketStream(
 	accountId: string,
 	grammarToolInputProperties: ReadonlyMap<string, string>,
 	options?: OpenAICodexResponsesOptions,
+	observer?: PerformanceTransportObserver,
 ): Promise<void> {
 	const { socket, entry, reused, release } = await acquireWebSocket(
 		url,
@@ -1513,6 +1537,7 @@ async function processWebSocketStream(
 		options?.signal,
 		websocketConnectTimeoutMs,
 		options?.env,
+		observer,
 	);
 	let keepConnection = true;
 	const useCachedContext = options?.transport === "websocket-cached" || options?.transport === "auto";
@@ -1538,8 +1563,21 @@ async function processWebSocketStream(
 			stats.lastPreviousResponseId = undefined;
 		}
 	}
+	let sent = false;
 	try {
-		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+		const frame = JSON.stringify({ type: "response.create", ...requestBody });
+		if (observer) {
+			try {
+				const connection = websocketPerformanceConnections.get(socket)!;
+				connection.connectionId ??= globalThis.crypto.randomUUID();
+				observer.beginSend(connection.hostname, JSON.parse(frame), connection.connectionId, reused);
+			} catch {
+				/* Metadata observation cannot prevent the actual send. */
+			}
+		}
+		socket.send(frame);
+		sent = true;
+		observer?.sendAccepted();
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
 				mapCodexEvents(
@@ -1579,6 +1617,7 @@ async function processWebSocketStream(
 			};
 		}
 	} catch (error) {
+		observer?.fail(!sent ? "send" : isCodexNonTransportError(error) ? "generation" : "transport");
 		if (entry) {
 			entry.continuation = undefined;
 		}

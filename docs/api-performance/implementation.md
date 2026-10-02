@@ -6,7 +6,7 @@ next: Extend the explicitly unsupported transports and recovery paths
 
 # Local performance recording: implemented scope
 
-This remains a **partial feature**, not complete transport coverage. Terms such as [attempt and logical request](research.md#definitions) follow the user's audit. Work stays on existing `main`, based on `f349a4d2d`; no push, deployment, paid provider call, or dependency change is part of this work.
+This remains a **partial feature**, not complete transport coverage. Terms such as [attempt and logical request](research.md#definitions) follow the user's audit. The initial implementation started at `f349a4d2d`; this Codex extension started on existing `main` at `51f721b39`; no push, deployment, paid provider call, or dependency change is part of this work.
 
 ## Enable and inspect
 
@@ -30,7 +30,7 @@ The default recorder owns the shared in-memory telemetry backend and exports its
 
 ## Boundaries and provenance
 
-The four recorded streaming routes are OpenAI Completions, OpenAI Responses, Azure Responses, and Pi Messages. A wrapped fetch observes each actual HTTP invocation, including rejection and retries. HTTP is distinguished from its observed streaming protocol; the response content type identifies SSE (server-sent events) or newline-delimited JSON without persisting headers.
+The five recorded streaming routes are OpenAI Completions, OpenAI Responses, Azure Responses, Pi Messages, and Codex Responses. A wrapped fetch observes each actual HTTP invocation, including rejection and retries. HTTP is distinguished from its observed streaming protocol; the response content type identifies SSE (server-sent events) or newline-delimited JSON without persisting headers.
 
 All offsets are monotonic milliseconds from the attempt anchor. UTC is only an absolute start time. Parsed content observations precede awaited extension callbacks; refusal deltas and new final-only text, reasoning, and tool arguments count. Duplicate final snapshots do not invent later arrival. No message timestamp, chunk/token conversion, throughput estimate, or token decode latency is used.
 
@@ -50,6 +50,19 @@ Usage has three distinct representations:
 
 Missing counts remain null; a reported zero remains zero. Existing assistant-message usage, raw usage, rendering, and hooks are unchanged. Settings are safe common serialized fields after request hooks; reasoning string settings use closed vocabularies. Returned model identity comes only from observed provider events. Pi timing describes the gateway, not its upstream provider; its normalized reasoning kind remains unknown.
 
+## Codex transport boundaries
+
+Codex uses the same observer and private recorder, not another telemetry backend. HTTP attempts start at actual fetch invocations, including compressed requests, rejections, and provider retries. Observation initialization is isolated: an allocation failure still invokes the actual fetch and creates no fabricated record. Settings come from the serialized post-hook body, not caller options that Codex does not send. Codex additionally allowlists temperature, service tier, text verbosity, scalar tool choice, and parallel tool calls; unknown values stay null. Its untransmitted `maxTokens` option does not invent an output limit.
+
+WebSocket records distinguish two actual invocations:
+
+- `attemptKind: connection`: socket construction through open or rejection. No generation model, usage, content timing, generation ordinal, or HTTP headers/status is invented. `observationPoint` is `socket_lifecycle`; completion is `connection_open` or `connection_rejection`.
+- `attemptKind: generation`: one `socket.send` invocation, including synchronous send rejection. `websocket_events` identifies parsed frames, and `send_rejection` distinguishes failed sends from later transport/generation failures. `sendAccepted` means the socket accepted the call, not that the provider received it.
+
+A random `connectionId` links sends to a socket without account IDs or auth hashes. `reused` describes actual acquisition of an existing socket; filter successful outcomes when counting successful reuse. The actual socket hostname survives changed requested routing and recording enabled after socket creation. An unavailable constructor creates no connection or generation record.
+
+Generation ordinals and previous-attempt links exclude connections. One logical request ID spans connection attempts, provider generation retries, and pre-start HTTP fallback; owning session and operation IDs remain separate from routing affinity. `transportTransition` distinguishes `pre_start_sse_fallback` from `session_sse_fallback` on actual HTTP attempts. There is no artificial fallback request when no fetch occurs. Original `response.done`/completed/incomplete/failed events are observed before normalization and awaited hooks; readable full/summary reasoning excludes encrypted replay data. Function-call arguments and custom-tool input done events also count new content before callbacks; later identical item/terminal snapshots do not move content-arrival timestamps. Close reason bodies and arbitrary provider errors never enter these records.
+
 ## Correlation and storage
 
 Session events assign a parent operation to a user request, distinct logical IDs to later assistant/tool turns, and the same logical ID to explicit automatic retries or overflow recovery. Summary retries reuse one logical ID. Compaction, branch summaries, bug-report summaries, and cache warming have separate purposes and IDs; summaries use the owning SDK session, not their provider routing ID. Explicit caller recording options survive unchanged.
@@ -62,7 +75,7 @@ Directory/file modes are 0700/0600 on POSIX; symlink final targets, nonprivate f
 
 ## Explicitly unsupported
 
-- Anthropic, injected/federated client transports, native Mistral, Codex HTTP/WebSocket connection/send/reuse/fallback, Bedrock handlers inside Smithy retries, and Google hidden transports.
+- Anthropic, injected/federated client transports, native Mistral, Bedrock handlers inside Smithy retries, and Google hidden transports.
 - Images, classifiers, and deferred polling/cancellation: ModelRuntime emits durable notices, not artificial attempt records. Nested standalone calls bypassing ModelRuntime do not automatically emit notices or inherit owning-session correlation.
 - Gateway upstream retries, redirects, hidden proxy replay, and overlapping successful fetch attribution; overlap closes the earlier observation with unknown completion.
 - Crash/kill and unfinished-attempt recovery. Windows permission assurance, ancestor symlink/replacement-race hardening, provider-specific timing metrics, and complete provider setting schemas.

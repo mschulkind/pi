@@ -40,7 +40,6 @@ process.once("exit", () => {
 	for (const reference of recorders) reference.deref()?.close(deadline);
 });
 const unsupportedApis = new Set([
-	"openai-codex-responses",
 	"bedrock-converse-stream",
 	"google-generative-ai",
 	"google-vertex",
@@ -244,7 +243,13 @@ export class LocalPerformanceRecorder {
 		for (const entry of eligible.slice(this.retainedFiles - 1)) unlinkSync(join(this.directory, entry.name));
 	}
 }
-const enabledApis = new Set(["openai-completions", "openai-responses", "azure-openai-responses", "pi-messages"]);
+const enabledApis = new Set([
+	"openai-completions",
+	"openai-responses",
+	"azure-openai-responses",
+	"pi-messages",
+	"openai-codex-responses",
+]);
 export function hasPerformanceTransportCoverage(api: string): boolean {
 	return enabledApis.has(api);
 }
