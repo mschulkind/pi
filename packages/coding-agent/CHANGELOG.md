@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Collapsed codemode calls use an unboxed inline status showing call counts, output size, model-call cost, and failures. Expand tool output to inspect the script, nested calls, and complete output.
+
 ## [0.99.1] - 2026-09-29
 
 ### New Features
