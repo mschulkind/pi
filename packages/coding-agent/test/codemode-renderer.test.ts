@@ -1,13 +1,18 @@
 import { stripVTControlCharacters } from "node:util";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Text } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { codemodeRenderers } from "../src/extensions/codemode/renderer.ts";
 import type { CodemodeToolDetails } from "../src/extensions/codemode/tool.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
-function render(result: AgentToolResult<CodemodeToolDetails | undefined>, isError = false, expanded = true): string {
+function render(
+	result: AgentToolResult<CodemodeToolDetails | undefined>,
+	isError = false,
+	expanded = true,
+	width = 200,
+): string {
 	const context = {
 		args: { code: "" },
 		toolCallId: "call",
@@ -22,8 +27,13 @@ function render(result: AgentToolResult<CodemodeToolDetails | undefined>, isErro
 		showImages: false,
 		isError,
 	} satisfies ToolRenderContext;
-	const component = codemodeRenderers.renderResult?.(result, { expanded, isPartial: false }, theme, context) as Text;
-	return stripVTControlCharacters(component.render(200).join("\n"))
+	const component = codemodeRenderers.renderResult?.(
+		result,
+		{ expanded, isPartial: false },
+		theme,
+		context,
+	) as Component;
+	return stripVTControlCharacters(component.render(width).join("\n"))
 		.split("\n")
 		.map((line) => line.trimEnd())
 		.join("\n")
@@ -39,7 +49,7 @@ describe("codemode renderer", () => {
 			{ code: "text('secret script');\ntext('second line');" },
 			theme,
 			{ expanded: false } as ToolRenderContext,
-		) as Text;
+		) as Component;
 		const text = stripVTControlCharacters(component.render(200).join("\n")).trim();
 		expect(text).toBe("codemode · 2 lines");
 	});
@@ -99,7 +109,7 @@ describe("codemode renderer", () => {
 	it("preserves the full script on expansion and the running-call count while streaming", () => {
 		const component = codemodeRenderers.renderCall?.({ code: "text('first');\ntext('second');" }, theme, {
 			expanded: true,
-		} as ToolRenderContext) as Text;
+		} as ToolRenderContext) as Component;
 		const script = stripVTControlCharacters(component.render(200).join("\n"));
 		expect(script).toContain("text('first')");
 		expect(script).toContain("text('second')");
@@ -159,5 +169,25 @@ describe("codemode renderer", () => {
 			true,
 		);
 		expect(text).toBe("The @options line must be followed by JavaScript source");
+	});
+
+	it("keeps long logical output out of the collapsed status at narrow widths", () => {
+		const text = render(
+			{
+				content: [
+					{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+					{ type: "text", text: "x".repeat(1000) },
+				],
+				details: { calls: [], fullOutputPath: "/tmp/out.txt" },
+			},
+			false,
+			false,
+			50,
+		);
+		const lines = text.split("\n");
+		expect(lines.length).toBeLessThanOrEqual(2);
+		expect(text).toContain("1 output line");
+		expect(text).toContain("/tmp/out.txt");
+		expect(text).not.toContain("x".repeat(50));
 	});
 });

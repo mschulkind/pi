@@ -3,7 +3,7 @@ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 type CorePromptPrototype = {
-	showAuthPrompt(this: unknown, dialog: unknown, prompt: unknown): Promise<string>;
+	showAuthPrompt(this: unknown, dialog: unknown, prompt: unknown, providerId: string): Promise<string>;
 	showExtensionConfirm(this: unknown, title: string, message: string): Promise<boolean>;
 	showExtensionSelector(
 		this: unknown,
@@ -21,9 +21,20 @@ describe("core prompts notify extension listeners", () => {
 		const context = { session: { extensionRunner: { withUIPrompt } } };
 
 		await expect(
-			prototype.showAuthPrompt.call(context, dialog, { type: "manual_code", message: "Enter code" }),
+			prototype.showAuthPrompt.call(context, dialog, { type: "manual_code", message: "Enter code" }, "anthropic"),
 		).resolves.toBe("123456");
 		expect(withUIPrompt).toHaveBeenCalledWith("input", "Enter code", expect.any(Function));
+	});
+
+	it("preserves provider-specific login choices while notifying prompt listeners", async () => {
+		const withUIPrompt = vi.fn((_kind, _title, run: () => Promise<string>) => run());
+		const showAuthSelect = vi.fn(async () => "copy_code");
+		const context = { session: { extensionRunner: { withUIPrompt } }, showAuthSelect };
+		const dialog = {};
+		const prompt = { type: "select", message: "Login method", options: [] };
+		await expect(prototype.showAuthPrompt.call(context, dialog, prompt, "radius")).resolves.toBe("copy_code");
+		expect(withUIPrompt).toHaveBeenCalledWith("select", "Login method", expect.any(Function));
+		expect(showAuthSelect).toHaveBeenCalledWith(dialog, prompt, "radius");
 	});
 
 	it("reports a core confirmation before it waits for a selection", async () => {
