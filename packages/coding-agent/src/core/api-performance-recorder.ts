@@ -31,6 +31,8 @@ export interface PerformanceCoverageGap {
 	sessionId: string | null;
 	operationId: string | null;
 	logicalRequestId: string | null;
+	sdkInvocationId: string | null;
+	orchestrationRetry: number | null;
 	purpose: string;
 	actualApiHostname: null;
 }
@@ -109,6 +111,13 @@ export class LocalPerformanceRecorder {
 			sessionId: safeId(correlation?.sessionId),
 			operationId: safeId(correlation?.operationId),
 			logicalRequestId: safeId(correlation?.logicalRequestId),
+			sdkInvocationId: safeId(correlation?.sdkInvocationId),
+			orchestrationRetry:
+				typeof correlation?.orchestrationRetry === "number" &&
+				Number.isSafeInteger(correlation.orchestrationRetry) &&
+				correlation.orchestrationRetry >= 0
+					? correlation.orchestrationRetry
+					: null,
 			purpose: correlation?.purpose ?? "unknown",
 			actualApiHostname: null,
 		};

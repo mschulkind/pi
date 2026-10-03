@@ -17,6 +17,12 @@ import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
 import { readPiManifest } from "../pi-manifest.ts";
+import {
+	captureExtensionEntryIdentity,
+	readExtensionEntryDigest,
+	rememberLoadedExtension,
+	rememberLoadedFactory,
+} from "../runtime-provenance.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
@@ -583,11 +589,24 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		...resolutionOptions,
 	});
 
+	const identity = captureExtensionEntryIdentity(extensionPath);
 	const module = await jiti.import(extensionPath, { default: true });
 	const factory = module as ExtensionFactory;
 	if (typeof factory !== "function") {
 		return undefined;
 	}
+	let changedDuringLoad = false;
+	try {
+		changedDuringLoad = identity.entryDigest !== readExtensionEntryDigest(extensionPath);
+	} catch {
+		changedDuringLoad = true;
+	}
+	rememberLoadedFactory(
+		factory,
+		changedDuringLoad
+			? Object.freeze({ ...identity, entryDigest: null, commit: null, uncertainty: "entry_changed_during_load" })
+			: identity,
+	);
 	if (isCurrentCacheToken(cacheToken)) {
 		extensionCache.set(extensionPath, factory);
 	}
@@ -624,6 +643,7 @@ async function initializeExtension(
 	runtime: ExtensionRuntime,
 ): Promise<Extension> {
 	const extension = createExtension(extensionPath, resolvedPath);
+	rememberLoadedExtension(extension, factory);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus);
 	try {
 		await factory(load.api);

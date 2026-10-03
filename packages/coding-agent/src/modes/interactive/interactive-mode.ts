@@ -108,6 +108,7 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { formatRuntimeInfo, getRuntimeInfo } from "../../core/runtime-info.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	type SessionEntry,
@@ -3245,6 +3246,16 @@ export class InteractiveMode {
 			if (text === "/name" || text.startsWith("/name ")) {
 				this.handleNameCommand(text);
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/runtime") {
+				const info = formatRuntimeInfo(
+					getRuntimeInfo(this.session.modelRuntime, this.session.resourceLoader.getExtensions().extensions),
+				);
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", info), 1, 0));
+				this.editor.setText("");
+				this.ui.requestRender();
 				return;
 			}
 			if (text === "/session") {

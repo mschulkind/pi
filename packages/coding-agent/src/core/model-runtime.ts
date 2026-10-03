@@ -76,6 +76,11 @@ import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
+	ProducerObservation,
+	type ProducerObservationCapability,
+	sanitizeCorrelationId,
+} from "./producer-observation.ts";
+import {
 	type AuthStatus,
 	type CompatibilityRequestConfig,
 	composeModelProvider,
@@ -87,6 +92,7 @@ import {
 } from "./provider-composer.ts";
 import { withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
+import { resolvePerformanceDirectory, type TransportRecordingStatus } from "./transport-recording.ts";
 import {
 	createVirtualModel,
 	findLatestResponse,
@@ -126,7 +132,7 @@ export interface CreateModelRuntimeOptions {
 	signal?: AbortSignal;
 	/** Skip initial catalog and availability refresh. Static models remain available. */
 	refreshOnCreate?: boolean;
-	/** Explicit local-only recording directory; null disables. Defaults to PI_API_PERFORMANCE_DIR, otherwise off. */
+	/** Local-only directory default; null disables. Environment opt-out/directory take precedence; otherwise YOLO_DURABLE_DIR supplies a private subdirectory. */
 	performanceDirectory?: string | null;
 }
 
@@ -177,7 +183,12 @@ function mergeHeaders(
 
 /** Configured pi-ai Models collection used by coding-agent and SDK consumers. */
 export class ModelRuntime implements Models {
-	private readonly performanceRecorder: LocalPerformanceRecorder | undefined;
+	private performanceRecorder: LocalPerformanceRecorder | undefined;
+	private readonly producerObservation = new ProducerObservation();
+
+	getProducerObservationCapability(): ProducerObservationCapability {
+		return this.producerObservation.capability;
+	}
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
@@ -248,9 +259,7 @@ export class ModelRuntime implements Models {
 			modelsStore,
 			providers,
 			process.env.PI_OFFLINE === undefined,
-			options.performanceDirectory === null
-				? undefined
-				: (options.performanceDirectory ?? process.env.PI_API_PERFORMANCE_DIR),
+			resolvePerformanceDirectory(options.performanceDirectory),
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
@@ -661,6 +670,23 @@ export class ModelRuntime implements Models {
 		return check ? { configured: true, source: "environment", label: check.source } : { configured: false };
 	}
 
+	/** Activation alone proves no traffic; verify observed writes and fresh local files. */
+	configureTransportRecording(options: { directory?: string | null } = {}): TransportRecordingStatus {
+		this.performanceRecorder?.close();
+		const directory = resolvePerformanceDirectory(options.directory);
+		this.performanceRecorder = directory ? new LocalPerformanceRecorder(directory) : undefined;
+		return this.getTransportRecordingStatus();
+	}
+
+	getTransportRecordingStatus(): TransportRecordingStatus {
+		return Object.freeze({
+			capabilityVersion: 1,
+			enabled: !!this.performanceRecorder,
+			observedHealth: this.performanceRecorder?.health ?? null,
+			coverage: "allowlisted_transports_only",
+		});
+	}
+
 	/** Health is process-local and deliberately excludes provider errors and credentials. */
 	getPerformanceRecordingHealth(): PerformanceRecordingHealth | undefined {
 		return this.performanceRecorder?.health;
@@ -705,12 +731,79 @@ export class ModelRuntime implements Models {
 
 		const { transformHeaders, ...rawProviderOptions } = options ?? {};
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
-		const performance =
+		let performance =
 			providerOptions.performance ??
 			this.getPerformanceRecordingOptions({
 				purpose: operation === "chat" ? "unknown" : "auxiliary",
 				...providerOptions.performanceCorrelation,
 			});
+		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
+		if (transformHeaders) headers = await transformHeaders(headers ?? {});
+		const env =
+			resolution.env || providerOptions.env
+				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
+				: undefined;
+		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
+		const hasGenerationDispatch =
+			operation === "chat" ||
+			(operation === "auxiliary" &&
+				(model.type === "image" ? !!provider.generateImages : model.type === "classifier" && !!provider.classify));
+		if (hasGenerationDispatch) {
+			const selected = performance ?? providerOptions.performanceCorrelation ?? {};
+			const purposes = [
+				"assistant",
+				"compaction",
+				"branch_summary",
+				"bug_report_summary",
+				"cache_warm",
+				"auxiliary",
+				"unknown",
+			];
+			const correlation = {
+				sessionId: sanitizeCorrelationId(selected.sessionId) ?? undefined,
+				operationId: sanitizeCorrelationId(selected.operationId) ?? undefined,
+				logicalRequestId: sanitizeCorrelationId(selected.logicalRequestId) ?? globalThis.crypto.randomUUID(),
+				sdkInvocationId: globalThis.crypto.randomUUID(),
+				orchestrationRetry:
+					typeof selected.orchestrationRetry === "number" &&
+					Number.isSafeInteger(selected.orchestrationRetry) &&
+					selected.orchestrationRetry >= 0
+						? selected.orchestrationRetry
+						: undefined,
+				purpose:
+					selected.purpose && purposes.includes(selected.purpose)
+						? selected.purpose
+						: operation === "auxiliary"
+							? ("auxiliary" as const)
+							: ("unknown" as const),
+			};
+			providerOptions.performanceCorrelation = correlation;
+			if (performance) performance = { ...performance, ...correlation };
+			this.producerObservation.emit({
+				schemaVersion: 1,
+				boundary: "provider_dispatch",
+				...correlation,
+				sessionId: correlation.sessionId ?? null,
+				operationId: correlation.operationId ?? null,
+				orchestrationRetry: correlation.orchestrationRetry ?? null,
+				provider: sanitizeCorrelationId(model.provider),
+				api: sanitizeCorrelationId(model.api),
+				model:
+					typeof model.id === "string" &&
+					model.id.length <= 256 &&
+					/^[a-zA-Z0-9_./:-]+$/.test(model.id) &&
+					!model.id.includes("://")
+						? model.id
+						: null,
+				wireAttemptId: null,
+				transportCoverage:
+					!this.nativeExtensionProviders.has(model.provider) &&
+					!this.extensionProviders.get(model.provider)?.streamSimple &&
+					hasPerformanceTransportCoverage(model.api)
+						? "supported"
+						: "unsupported",
+			});
+		}
 		if (performance) {
 			const customStream =
 				this.nativeExtensionProviders.has(model.provider) ||
@@ -721,13 +814,7 @@ export class ModelRuntime implements Models {
 				this.performanceRecorder?.noteUnsupported(model.api, performance);
 			else if (customStream) this.performanceRecorder?.noteUnsupported("custom_provider", performance);
 		}
-		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
-		if (transformHeaders) headers = await transformHeaders(headers ?? {});
-		const env =
-			resolution.env || providerOptions.env
-				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
-				: undefined;
-		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
+
 		return {
 			provider,
 			model: requestModel,

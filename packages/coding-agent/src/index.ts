@@ -1,3 +1,13 @@
+export {
+	type GenerationObservation,
+	getProducerObservationCapability,
+	type ProducerObservationCapability,
+} from "./core/producer-observation.ts";
+
+export { formatRuntimeInfo, getRuntimeInfo } from "./core/runtime-info.ts";
+export { getLoadedExtensionIdentity, type LoadedExtensionIdentity } from "./core/runtime-provenance.ts";
+export type { TransportRecordingStatus } from "./core/transport-recording.ts";
+
 // Core session management
 
 export { type Args, parseArgs } from "./cli/args.ts";

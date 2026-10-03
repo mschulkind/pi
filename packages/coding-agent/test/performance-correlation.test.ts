@@ -35,10 +35,10 @@ describe("local request correlation", () => {
 		state.observe({ type: "message_start", message: { role: "assistant" } });
 		state.observe({ type: "auto_retry_start" });
 		state.observe({ type: "turn_start" });
-		expect(state.correlation).toEqual(first);
+		expect(state.correlation).toMatchObject({ ...first, orchestrationRetry: expect.any(Number) });
 		state.observe({ type: "auto_compaction_start", reason: "overflow" });
 		state.observe({ type: "turn_start" });
-		expect(state.correlation).toEqual(first);
+		expect(state.correlation).toMatchObject({ ...first, orchestrationRetry: expect.any(Number) });
 		state.observe({ type: "turn_start" });
 		expect(state.correlation.logicalRequestId).not.toBe(first.logicalRequestId);
 		expect(state.correlation.operationId).toBe(first.operationId);

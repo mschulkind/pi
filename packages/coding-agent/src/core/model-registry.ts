@@ -26,7 +26,9 @@ import type {
 	ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
+import type { ProducerObservationCapability } from "./producer-observation.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
+import type { TransportRecordingStatus } from "./transport-recording.ts";
 import type { VirtualModelDefinition } from "./virtual-models.ts";
 
 export type { ProviderConfigInput } from "./provider-composer.ts";
@@ -50,6 +52,22 @@ export class ModelRegistry {
 
 	constructor(runtime: ModelRuntime) {
 		this.runtime = runtime;
+	}
+
+	getProducerObservationCapability(): ProducerObservationCapability {
+		return this.runtime.getProducerObservationCapability();
+	}
+
+	getTransportRecordingStatus(): TransportRecordingStatus {
+		return this.runtime.getTransportRecordingStatus();
+	}
+
+	configureTransportRecording(options: { directory?: string | null } = {}): TransportRecordingStatus {
+		return this.runtime.configureTransportRecording(options);
+	}
+
+	flushPerformanceRecords(): Promise<void> {
+		return this.runtime.flushPerformanceRecords();
 	}
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */

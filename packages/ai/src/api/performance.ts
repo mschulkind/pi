@@ -48,6 +48,10 @@ export const apiPerformanceTelemetrySchema = defineTelemetrySchema({
 
 /** One intended model operation; retries share this identity. Never sent to a provider. */
 export interface PerformanceRecordingOptions {
+	/** Selected by ModelRuntime at provider dispatch; not a transport identity. */
+	sdkInvocationId?: string;
+	/** Explicit agent/summary retry index; never inferred from wire retries. */
+	orchestrationRetry?: number;
 	record: (record: PerformanceAttemptRecord) => void | Promise<void>;
 	sessionId?: string;
 	operationId?: string;
@@ -72,6 +76,10 @@ export interface PerformanceAttemptRecord {
 	operationId: string | null;
 	logicalRequestId: string;
 	attemptId: string;
+	sdkInvocationId: string | null;
+	orchestrationRetry: number | null;
+	/** Known response boundary only; never a URL, tool id, or upstream-provider attestation. */
+	responseHandle: string | null;
 	previousAttemptId: string | null;
 	attemptOrdinal: number | null;
 	purpose: NonNullable<PerformanceRecordingOptions["purpose"]>;
@@ -363,6 +371,9 @@ class Attempt {
 			operationId: identifier(options.operationId),
 			logicalRequestId,
 			attemptId,
+			sdkInvocationId: identifier(options.sdkInvocationId),
+			orchestrationRetry: number(options.orchestrationRetry),
+			responseHandle: null,
 			previousAttemptId: kind === "connection" ? null : previous.previous,
 			attemptOrdinal: ordinal,
 			purpose: options.purpose ?? "unknown",
@@ -447,6 +458,13 @@ class Attempt {
 		const e = object(event);
 		const response = object(e.response ?? e.message);
 		this.record.returnedModel = identifier(e.model ?? response.model) ?? this.record.returnedModel;
+		// Only ChatCompletionChunk.id on a known completion response boundary. Nested tool ids
+		// and arbitrary events/metadata are deliberately not candidates.
+		if (this.record.api === "openai-completions" && e.object === "chat.completion.chunk") {
+			const handle = e.id;
+			if (typeof handle === "string" && handle.length <= 256 && /^[a-zA-Z0-9_-]+$/.test(handle))
+				this.record.responseHandle ??= handle;
+		}
 		const choices = Array.isArray(e.choices) ? e.choices : [];
 		const choice = object(choices[0]);
 		let reportSource: PerformanceAttemptRecord["usage"]["rawReportSources"][number] = "direct_provider";

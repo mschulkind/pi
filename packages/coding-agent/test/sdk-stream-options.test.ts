@@ -202,7 +202,9 @@ describe("createAgentSession stream options", () => {
 			purpose: "compaction" as const,
 		};
 		const options = await captureStreamOptions("openai-completions", {}, { performance });
-		expect(options?.performance).toBe(performance);
+		expect(options?.performance).toMatchObject(performance);
+		expect(options?.performance?.sdkInvocationId).toEqual(expect.any(String));
+		expect(performance).not.toHaveProperty("sdkInvocationId");
 		expect(options?.performance).not.toHaveProperty("localTelemetryContext");
 	});
 

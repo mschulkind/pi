@@ -24,7 +24,7 @@ jq -c 'select(.recordKind == "coverage_gap")' \
   /absolute/private/performance/attempts-*.jsonl
 ```
 
-SDK consumers can pass `performanceDirectory` to `ModelRuntime.create`; null disables recording even with the environment variable. `PI_TELEMETRY=0` is independent. No implicit directory or consent is assumed. Standalone supported AI adapters accept `performance` with a consumer-owned record callback.
+SDK consumers can pass `performanceDirectory` to `ModelRuntime.create`; null disables recording even with the environment variable. `PI_TELEMETRY=0` is independent. The producer/runtime extension adds an authorized private durable-directory default, explicit opt-out, activation API, and passive dispatch observation; its [public contract](../core-producer-runtime/implementation.md) supersedes the original opt-in-only default. Standalone supported AI adapters accept `performance` with a consumer-owned record callback.
 
 The default recorder owns the shared in-memory telemetry backend and exports its privacy-allowlisted JSON snapshot to local files only. No caller-supplied telemetry context is accepted by this feature. General telemetry contexts are not forwarded. Records never enter model context, session transcripts, or bug-report uploads.
 
@@ -65,7 +65,7 @@ Generation ordinals and previous-attempt links exclude connections. One logical 
 
 ## Correlation and storage
 
-Session events assign a parent operation to a user request, distinct logical IDs to later assistant/tool turns, and the same logical ID to explicit automatic retries or overflow recovery. Summary retries reuse one logical ID. Compaction, branch summaries, bug-report summaries, and cache warming have separate purposes and IDs; summaries use the owning SDK session, not their provider routing ID. Explicit caller recording options survive unchanged.
+Session events assign a parent operation to a user request, distinct logical IDs to later assistant/tool turns, and the same logical ID to explicit automatic retries or overflow recovery. Summary retries reuse one logical ID. Compaction, branch summaries, bug-report summaries, and cache warming have separate purposes and IDs; summaries use the owning SDK session, not their provider routing ID. Explicit caller record callbacks and valid selected identities remain in use; each ModelRuntime dispatch adds its own SDK invocation identity under the [producer contract](../core-producer-runtime/implementation.md#identities-and-boundaries).
 
 The queue holds at most 128 records, each at most 256 KiB. Files target 8 MiB, with four retained across inactive runs and this writer's rotations. Other live writers in the same [process-ID namespace](https://man7.org/linux/man-pages/man7/pid_namespaces.7.html) are protected from pruning, so aggregate storage can exceed four files; process-ID reuse can temporarily protect old files. Do not share a recording directory across hosts or process-ID namespaces: this liveness check cannot identify their active writers. A single record can exceed a smaller configured file target.
 
