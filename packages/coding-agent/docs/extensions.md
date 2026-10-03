@@ -149,6 +149,45 @@ A tool can run other tools with `ctx.executeTool(name, args, { signal, onUpdate 
 
 See [`hello.ts`](../examples/extensions/hello.ts), [`todo.ts`](../examples/extensions/todo.ts), [`dynamic-tools.ts`](../examples/extensions/dynamic-tools.ts), and [`truncated-tool.ts`](../examples/extensions/truncated-tool.ts).
 
+### Compact display data
+
+`ToolDefinition.getCompactHints` is an optional synchronous callback returning `CompactTranscriptHints`: producer-selected plain display data, not a terminal component or execution result. Core invokes it on accepted argument and result lifecycle changes, not terminal frames. Collapsed tools use at most two visual lines by default; existing call/result renderers are invoked for expanded detail and explicit legacy presentation. Unknown tools never disclose arguments or results in the compact fallback. Built-in hints remain tied to their original renderers, so redacting overrides do not inherit them by name.
+
+The exported `ToolCompactHintsProvider<TArgs, TDetails>` receives typed `args`, optional latest `result`, `toolCallId`, `cwd`, `argsComplete`, `executionStarted`, `isPartial`, and `isError`. It receives no theme, renderer state, component, or invalidation callback. Producers must not mutate inputs or perform I/O, start timers, or call models.
+
+```typescript
+import type { ToolCompactHintsProvider } from "@earendil-works/pi-coding-agent";
+
+const getCompactHints: ToolCompactHintsProvider<{ path: string }, { count: number }> =
+  ({ args, result, isError }) => ({
+    label: args.path,
+    error: isError ? "operation failed" : undefined,
+    counts: result ? [{ label: "items", value: result.details.count }] : undefined,
+  });
+// Attach getCompactHints to the tool definition alongside execute/renderCall/renderResult.
+```
+
+String limits count [UTF-16 code units](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/length): JavaScript string length, where most emoji count as two.
+
+| Hint | Accepted data |
+|---|---|
+| `label`, `summary`, `error` | Optional strings, at most 160 UTF-16 code units each. |
+| `status` | `info`, `warning`, `error`, `running`, `completed`, or `cancelled`. |
+| `counts` | Up to four `{ label, value }` records; label at most 32 code units and value a nonnegative safe integer. |
+| `progress` | `{ completed, total }` nonnegative safe integers, with completed no greater than total. |
+| `costUsd` | Finite nonnegative recorded USD cost, not an estimated or newly requested model cost. |
+| `outputPaths` | Up to two strings, at most 256 code units each; no file access. |
+
+The shared data validator copies accepted fields, limits serialized data to 4 KiB (4096 bytes), removes terminal commands and bidirectional controls (characters that change neighboring text direction), and flattens line breaks. Unknown keys are ignored without traversal; invalid known fields or throwing providers discard the supplied hints. Generic display data exposes identity and state only, never arguments, result text, JSON, images, or an unknown renderer's output. The producer owns what is safe to disclose, including nested error text and aggregate counts. These display rules do not change model-facing content or tool outcomes.
+
+The shared formatter reserves an alert marker even at one column when a successfully completed control tool reports nested errors or warnings. It keeps execution state separately and includes it when space permits. Recorded positive fractional-cent costs retain two significant digits (the first two digits beginning with the first nonzero digit) rather than rounding to zero. The same formatter serves live tools, custom messages, displayed entries, extension notices, and user shell rows. See [presentation settings](settings.md#transcript-presentation) for global mode, line budget, and exact legacy exceptions.
+
+Register custom display data with `pi.registerMessageHints<T>(customType, message => hints)` or `pi.registerEntryHints<T>(customType, entry => hints)`. These use the same first-registration lookup order as renderers, without making hidden messages or entries visible. Entry renderers are probed with collapsed options only to preserve their `undefined` eligibility contract; core never renders or analyzes that component for hints. Providers recompute on replay from the original typed data and are not persisted.
+
+`ctx.ui.notify(message, severity, hints)` accepts optional plain hints for the interactive transcript. Severity remains authoritative; info is not success. Consecutive info notices replace each other at the existing status boundary, while warnings/errors remain separate. Notices are ephemeral. RPC and print delivery still receive the original message and severity, without hint fields.
+
+Custom renderer exceptions, including failures during terminal rendering, show a generic unavailable-detail row rather than raw content that may have been redacted. A registered message renderer returning `undefined` also does not authorize default Markdown fallback. Permission dialogs, pickers, widgets, dashboards, and thinking previews/summaries are outside this policy; it requests no additional model calls.
+
 ### Tool exposure
 
 `exposure` controls how the model reaches a tool. "Callable" means callable from other tools through `ctx.executeTool()` (`ctx.tools`), as the `codemode` tool's scripts do:
@@ -196,7 +235,7 @@ pi.unregisterMcpServer("jira");
 
 Servers registered while the extension loads connect when the session starts, together with the `mcp.json` servers; servers registered later connect right away, and `pi.unregisterMcpServer()` closes the connection and makes the server's tools unreachable. Registrations are not saved: register again on every load, for example based on the extension's own settings. A server in `mcp.json` with the same name takes precedence, and `/mcp` shows the override. Registering the same name again replaces the extension's earlier registration; names registered by another extension, invalid names, and invalid configs throw.
 
-The built-in MCP support connects registered servers. When nothing does, because another extension replaced it (see [MCP](mcp.md#other-mcp-extensions)), each registration is reported as an extension error. Other MCP extensions can connect registered servers too: read them with `pi.getMcpServers()` on `session_start` and handle the `mcp_servers_change` event for later changes.
+The built-in MCP support connects registered servers. When nothing does, because another extension replaced it (see [MCP](mcp.md#replace-the-built-in-mcp-support)), each registration is reported as an extension error. Other MCP extensions can connect registered servers too: read them with `pi.getMcpServers()` on `session_start` and handle the `mcp_servers_change` event for later changes.
 
 <a id="extensioncontext"></a>
 <a id="extensioncommandcontext"></a>

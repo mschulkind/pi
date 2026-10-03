@@ -7,7 +7,8 @@
  * createAgentSession() applies that cwd when it builds the actual built-in tools.
  *
  * For custom tools, see 06-extensions.ts - custom tools are registered via the
- * extensions system using pi.registerTool().
+ * extensions system using pi.registerTool(). Optional getCompactHints selects safe
+ * interactive display data; SDK tool execution and result events are unchanged.
  */
 
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";

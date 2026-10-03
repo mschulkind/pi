@@ -123,3 +123,7 @@ The checked extension examples cover the main patterns:
 - [`doom-overlay/`](../examples/extensions/doom-overlay/) demonstrates a continuously rendered overlay.
 
 The public exports are defined in [`packages/tui/src/index.ts`](https://github.com/earendil-works/pi/blob/main/packages/tui/src/index.ts). See [Extensions](extensions.md) for extension lifecycle, state, tools, events, and mode behavior.
+
+## Transcript presentation
+
+Core owns collapsed transcript rows, including their total visual-line budget and status marker. Custom components still own expanded detail and explicit legacy rendering. Supply [plain display hints](extensions.md#compact-display-data), not a component to be clipped. Dialogs, overlays, widgets, and dashboards are unaffected.

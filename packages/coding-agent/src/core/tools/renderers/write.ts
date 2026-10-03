@@ -1,3 +1,4 @@
+import { builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the write tool.
  *
@@ -142,7 +143,17 @@ function formatWriteResult(
 	return `\n${theme.fg("error", output)}`;
 }
 
-export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
+export const writeRenderers: Pick<
+	ToolDefinition<any, any>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as { path?: string; file_path?: string; content?: string } | undefined;
+		const hints = builtinCompactHints(input, `write ${args?.path ?? args?.file_path ?? ""}`);
+		if (typeof args?.content === "string")
+			hints.counts = [{ label: "lines", value: args.content.trimEnd().split("\n").length }];
+		return hints;
+	},
 	renderCall(args, theme, context) {
 		const renderArgs = args as { path?: string; file_path?: string; content?: string } | undefined;
 		const rawPath = str(renderArgs?.file_path ?? renderArgs?.path);
@@ -178,4 +189,4 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		text.setText(output);
 		return text;
 	},
-};
+});

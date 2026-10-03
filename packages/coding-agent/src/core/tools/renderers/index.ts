@@ -16,7 +16,7 @@ import { lsRenderers } from "./ls.ts";
 import { readRenderers } from "./read.ts";
 import { writeRenderers } from "./write.ts";
 
-export type ToolRenderers = Pick<ToolDefinition<any, any>, "renderCall" | "renderResult">;
+export type ToolRenderers = Pick<ToolDefinition<any, any>, "renderCall" | "renderResult" | "getCompactHints">;
 
 export {
 	createShellRenderers,
@@ -53,7 +53,7 @@ export function withBuiltInRenderers<TDefinition extends ToolRenderers>(
 	definition: TDefinition | undefined,
 ): TDefinition | ToolRenderers | undefined {
 	const builtIn = createAllToolRenderers()[toolName as ToolName];
-	if (!definition) return builtIn;
+	if (!definition) return builtIn ? { renderCall: builtIn.renderCall, renderResult: builtIn.renderResult } : undefined;
 	if (!builtIn) return definition;
 	return {
 		...definition,

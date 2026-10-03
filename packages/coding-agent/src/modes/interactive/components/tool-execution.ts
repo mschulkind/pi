@@ -10,10 +10,25 @@ import {
 	Text,
 	type TUI,
 	type TuiMouseEvent,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
+import type {
+	ToolCompactHintsInput,
+	ToolDefinition,
+	ToolRenderContext,
+	ToolRenderResultOptions,
+} from "../../../core/extensions/types.ts";
+import { ownedCompactProvider, pauseCompactDetail } from "../../../core/tools/renderers/compact-ownership.ts";
+import {
+	CompactHintsCache,
+	type CompactTranscriptHints,
+	type NormalizedTranscriptPresentation,
+	normalizeTranscriptPresentation,
+	resolveTranscriptPresentation,
+} from "../../../core/transcript-presentation.ts";
 import type { Theme } from "../theme/theme.ts";
+import { CompactTranscriptComponent } from "./compact-transcript.ts";
 
 /**
  * What this component needs from a tool: how to draw it. It neither executes tools nor reads their
@@ -24,6 +39,7 @@ import type { Theme } from "../theme/theme.ts";
  */
 export interface ToolRenderers {
 	renderShell?: "default" | "self" | "inline";
+	getCompactHints?: (input: ToolCompactHintsInput<any, any>) => CompactTranscriptHints | undefined;
 	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
 	renderResult?: (
 		result: AgentToolResult<any>,
@@ -41,11 +57,19 @@ import { keyHint } from "./keybinding-hints.ts";
 const FALLBACK_PREVIEW_LINES = 10;
 
 export interface ToolExecutionOptions {
+	onCompactDiagnostic?: (message: string) => void;
+	transcriptPresentation?: () => NormalizedTranscriptPresentation;
 	showImages?: boolean;
 	imageWidthCells?: number;
 }
 
 export class ToolExecutionComponent extends Container {
+	private presentation: () => NormalizedTranscriptPresentation;
+	private hintsCache = new CompactHintsCache();
+	private compactRow = new CompactTranscriptComponent({ identity: "", status: "preparing" });
+	private detailDirty = true;
+	private startedAt?: number;
+	private endedAt?: number;
 	private contentBox: Box;
 	private contentText: Text;
 	private contentTextRegion: MouseRegion;
@@ -89,6 +113,8 @@ export class ToolExecutionComponent extends Container {
 		cwd: string,
 	) {
 		super();
+		this.hintsCache = new CompactHintsCache(options.onCompactDiagnostic);
+		this.presentation = options.transcriptPresentation ?? (() => normalizeTranscriptPresentation());
 		this.toolName = toolName;
 		this.toolCallId = toolCallId;
 		this.args = args;
@@ -114,7 +140,32 @@ export class ToolExecutionComponent extends Container {
 			this.addChild(this.contentTextRegion);
 		}
 
+		this.refreshHints();
 		this.updateDisplay();
+	}
+
+	private policy() {
+		return resolveTranscriptPresentation(this.presentation(), "tool", this.toolName);
+	}
+	private isCompact(): boolean {
+		return !this.expanded && this.policy().mode === "compact";
+	}
+	private refreshHints(): void {
+		this.hintsCache.update(
+			this.toolDefinition
+				? ownedCompactProvider(this.toolDefinition.getCompactHints, this.toolDefinition)
+				: undefined,
+			{
+				args: this.args,
+				result: this.result ? { content: this.result.content as any, details: this.result.details } : undefined,
+				toolCallId: this.toolCallId,
+				cwd: this.cwd,
+				argsComplete: this.argsComplete,
+				executionStarted: this.executionStarted,
+				isPartial: this.isPartial,
+				isError: this.result?.isError ?? false,
+			},
+		);
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
@@ -136,6 +187,9 @@ export class ToolExecutionComponent extends Container {
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
 			args: this.args,
+			startedAt: this.startedAt,
+			endedAt: this.endedAt,
+			result: this.result ? { content: this.result.content as any, details: this.result.details } : undefined,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
 				this.invalidate();
@@ -182,18 +236,23 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	updateArgs(args: any): void {
+		if (this.result && !this.isPartial) return;
 		this.args = args;
+		this.refreshHints();
 		this.updateDisplay();
 	}
 
 	markExecutionStarted(): void {
 		this.executionStarted = true;
+		this.startedAt ??= Date.now();
+		this.refreshHints();
 		this.updateDisplay();
 		this.ui.requestRender();
 	}
 
 	setArgsComplete(): void {
 		this.argsComplete = true;
+		this.refreshHints();
 		this.updateDisplay();
 		this.ui.requestRender();
 	}
@@ -206,8 +265,11 @@ export class ToolExecutionComponent extends Container {
 		},
 		isPartial = false,
 	): void {
+		if (isPartial && this.result && !this.isPartial) return;
 		this.result = result;
 		this.isPartial = isPartial;
+		if (!isPartial) this.endedAt ??= Date.now();
+		this.refreshHints();
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -263,6 +325,32 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		if (this.isCompact()) {
+			this.compactRow.setData(
+				{
+					identity: this.toolName,
+					status:
+						this.result && !this.isPartial
+							? this.result.isError
+								? "error"
+								: "completed"
+							: this.executionStarted
+								? "running"
+								: "preparing",
+					hints: this.hintsCache.hints,
+				},
+				this.policy().maxLines,
+			);
+			return this.compactRow.render(width);
+		}
+		try {
+			return this.renderDetail(width);
+		} catch {
+			return width > 0 ? [truncateToWidth("renderer unavailable", width, "")] : [];
+		}
+	}
+	private renderDetail(width: number): string[] {
+		if (this.detailDirty) this.updateDisplay();
 		if (this.hideComponent) {
 			return [];
 		}
@@ -308,6 +396,23 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		if (this.isCompact()) {
+			if (event.type === "click" && event.button === "left") {
+				this.setExpanded(true);
+				this.ui.requestRender();
+				return {
+					handled: true,
+					target: {
+						component: this,
+						originX: event.screenX - event.x,
+						originY: event.screenY - event.y,
+						width: event.width,
+						height: event.height,
+					},
+				};
+			}
+			return undefined;
+		}
 		if (!this.hasRendererDefinition() || this.getRenderShell() === "default") return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
 		return this.selfRenderContainer.handleMouse({
@@ -318,6 +423,14 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.detailDirty = true;
+		if (this.isCompact()) {
+			pauseCompactDetail(this.resultRendererComponent);
+			return;
+		}
+		this.detailDirty = false;
+		// Hydrate lifecycle clocks before first expanded shell rendering.
+
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError
@@ -345,7 +458,7 @@ export class ToolExecutionComponent extends Container {
 					hasContent = true;
 				} catch {
 					this.callRendererComponent = undefined;
-					renderContainer.addChild(this.createResultRegion(this.createCallFallback()));
+					renderContainer.addChild(this.createResultRegion(new Text("renderer unavailable", 0, 0)));
 					hasContent = true;
 				}
 			}
@@ -371,7 +484,7 @@ export class ToolExecutionComponent extends Container {
 						hasContent = true;
 					} catch {
 						this.resultRendererComponent = undefined;
-						const component = this.createResultFallback();
+						const component = new Text("renderer unavailable", 0, 0);
 						if (component) {
 							renderContainer.addChild(this.createResultRegion(component));
 							hasContent = true;

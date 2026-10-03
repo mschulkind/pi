@@ -1,3 +1,4 @@
+import { addCompactWarning, builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the read tool.
  *
@@ -148,7 +149,34 @@ function formatReadResult(
 	return text;
 }
 
-export const readRenderers: Pick<ToolDefinition<any, ReadToolDetails | undefined>, "renderCall" | "renderResult"> = {
+export const readRenderers: Pick<
+	ToolDefinition<any, ReadToolDetails | undefined>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as ReadRenderArgs | undefined;
+		const classification = getCompactReadClassification(args, input.cwd);
+		const path =
+			typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
+		const start = args?.offset ?? 1;
+		const range =
+			args?.offset != null || args?.limit != null
+				? `:${start}${args?.limit != null ? `-${start + args.limit - 1}` : ""}`
+				: "";
+		const label = classification
+			? classification.kind === "skill"
+				? `[skill] ${classification.label}`
+				: `read ${classification.kind} ${classification.label}`
+			: `read ${path}`;
+		return addCompactWarning(
+			builtinCompactHints(input, label + range),
+			input.result?.details?.truncation?.truncated
+				? input.result.details.truncation.firstLineExceedsLimit
+					? "first line exceeds limit"
+					: "output truncated"
+				: undefined,
+		);
+	},
 	renderCall(rawArgs, theme, context) {
 		const args = rawArgs as ReadRenderArgs | undefined;
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
@@ -173,4 +201,4 @@ export const readRenderers: Pick<ToolDefinition<any, ReadToolDetails | undefined
 		);
 		return text;
 	},
-};
+});

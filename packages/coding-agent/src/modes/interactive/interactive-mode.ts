@@ -1,3 +1,5 @@
+import { type CompactTranscriptHints, normalizeTranscriptPresentation } from "../../core/transcript-presentation.ts";
+import { ExtensionNoticeComponent } from "./components/extension-notice.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -495,6 +497,7 @@ export class InteractiveMode {
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: ThemedText | undefined = undefined;
 	private lastStatusMessage = "";
+	private lastExtensionNotice?: ExtensionNoticeComponent;
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
@@ -2601,7 +2604,7 @@ export class InteractiveMode {
 			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
 			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
-			notify: (message, type) => this.showExtensionNotify(message, type),
+			notify: (message, type, hints) => this.showExtensionNotify(message, type, hints),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
@@ -2921,14 +2924,34 @@ export class InteractiveMode {
 	/**
 	 * Show a notification for extensions.
 	 */
-	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
-		if (type === "error") {
-			this.showError(message);
-		} else if (type === "warning") {
-			this.showWarning(message);
-		} else {
-			this.showStatus(message);
+	private showExtensionNotify(
+		message: string,
+		type: "info" | "warning" | "error" = "info",
+		hints?: CompactTranscriptHints,
+	): void {
+		const children = this.chatContainer.children;
+		const last = children.at(-1);
+		if (type === "info") {
+			if (last === this.lastExtensionNotice && last) this.chatContainer.removeChild(last);
+			else if (last === this.lastStatusText && last) {
+				this.chatContainer.removeChild(last);
+				if (this.lastStatusSpacer && this.chatContainer.children.at(-1) === this.lastStatusSpacer)
+					this.chatContainer.removeChild(this.lastStatusSpacer);
+			}
 		}
+		const row = new ExtensionNoticeComponent(
+			message,
+			type,
+			{
+				onCompactDiagnostic: (message) => this.showWarning(message),
+				transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+			},
+			hints,
+		);
+		row.setExpanded(this.toolOutputExpanded);
+		this.chatContainer.addChild(row);
+		if (type === "info") this.lastExtensionNotice = row;
+		this.ui.requestRender();
 	}
 
 	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
@@ -3503,6 +3526,10 @@ export class InteractiveMode {
 									content.id,
 									content.arguments,
 									{
+										onCompactDiagnostic: (message) => this.showWarning(message),
+										transcriptPresentation: () =>
+											this.settingsManager.getTranscriptPresentation?.() ??
+											normalizeTranscriptPresentation(),
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
 									},
@@ -3581,6 +3608,9 @@ export class InteractiveMode {
 						event.toolCallId,
 						event.args,
 						{
+							onCompactDiagnostic: (message) => this.showWarning(message),
+							transcriptPresentation: () =>
+								this.settingsManager.getTranscriptPresentation?.() ?? normalizeTranscriptPresentation(),
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
 						},
@@ -3592,6 +3622,7 @@ export class InteractiveMode {
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
+				component.setArgsComplete();
 				component.markExecutionStarted();
 				this.ui.requestRender();
 				break;
@@ -3788,6 +3819,10 @@ export class InteractiveMode {
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
 	private showStatus(message: string): void {
+		if (this.lastExtensionNotice && this.chatContainer.children.at(-1) === this.lastExtensionNotice) {
+			this.chatContainer.removeChild(this.lastExtensionNotice);
+			this.lastExtensionNotice = undefined;
+		}
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
@@ -3814,7 +3849,15 @@ export class InteractiveMode {
 		if (!renderer) {
 			return;
 		}
-		const component = new CustomEntryComponent(entry, renderer);
+		const component = new CustomEntryComponent(
+			entry,
+			renderer,
+			{
+				onCompactDiagnostic: (message) => this.showWarning(message),
+				transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+			},
+			this.session.extensionRunner.getEntryHints(entry.customType),
+		);
 		component.setExpanded(this.toolOutputExpanded);
 		if (!component.hasContent()) {
 			return;
@@ -3834,7 +3877,10 @@ export class InteractiveMode {
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		switch (message.role) {
 			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
+				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext, {
+					onCompactDiagnostic: (message) => this.showWarning(message),
+					transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+				});
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -3844,6 +3890,7 @@ export class InteractiveMode {
 					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
 					message.fullOutputPath,
 				);
+				component.setExpanded(this.toolOutputExpanded);
 				this.chatContainer.addChild(component);
 				break;
 			}
@@ -3855,6 +3902,11 @@ export class InteractiveMode {
 						renderer,
 						this.getMarkdownThemeWithSettings(),
 						this.outputPad,
+						{
+							onCompactDiagnostic: (message) => this.showWarning(message),
+							transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+						},
+						this.session.extensionRunner.getMessageHints(message.customType),
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3984,6 +4036,9 @@ export class InteractiveMode {
 							content.id,
 							content.arguments,
 							{
+								onCompactDiagnostic: (message) => this.showWarning(message),
+								transcriptPresentation: () =>
+									this.settingsManager.getTranscriptPresentation?.() ?? normalizeTranscriptPresentation(),
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
 							},
@@ -4020,6 +4075,8 @@ export class InteractiveMode {
 				const component = renderedPendingTools.get(message.toolCallId);
 				if (component) {
 					component.updateResult(message);
+					// Hydrate the accepted result before complete arguments can schedule edit preview work.
+					component.setArgsComplete();
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
@@ -4029,6 +4086,7 @@ export class InteractiveMode {
 		}
 
 		for (const [toolCallId, component] of renderedPendingTools) {
+			component.setArgsComplete();
 			this.pendingTools.set(toolCallId, component);
 		}
 		this.ui.requestRender();
@@ -4509,7 +4567,7 @@ export class InteractiveMode {
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
 		}
-		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
+		for (const container of [this.loadedResourcesContainer, this.chatContainer, this.pendingMessagesContainer]) {
 			for (const child of container.children) {
 				if (isExpandable(child)) {
 					child.setExpanded(expanded);
@@ -4857,6 +4915,7 @@ export class InteractiveMode {
 			const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
 			selector = new SettingsSelectorComponent(
 				{
+					transcriptPresentation: this.settingsManager.getTranscriptPresentation(),
 					autoCompact: this.session.autoCompactionEnabled,
 					defaultModel,
 					currentModel: this.session.model,
@@ -4900,6 +4959,16 @@ export class InteractiveMode {
 					warnings: this.settingsManager.getWarnings(),
 				},
 				{
+					onTranscriptPresentationChange: (settings) => {
+						// Keep omitted exception overrides inheriting, rather than persisting normalized defaults.
+						this.settingsManager.setTranscriptPresentation({
+							...this.settingsManager.getGlobalSettings().transcriptPresentation,
+							mode: settings.mode,
+							maxLines: settings.maxLines,
+						});
+						this.chatContainer.invalidate();
+						this.ui.requestRender();
+					},
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
@@ -6972,7 +7041,11 @@ export class InteractiveMode {
 			const result = eventResult.result;
 
 			// Create UI component for display
-			this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
+			this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, {
+				onCompactDiagnostic: (message) => this.showWarning(message),
+				transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+			});
+			this.bashComponent.setExpanded(this.toolOutputExpanded);
 			if (this.session.isStreaming) {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
@@ -7000,7 +7073,11 @@ export class InteractiveMode {
 
 		// Normal execution path (possibly with custom operations)
 		const isDeferred = this.session.isStreaming;
-		this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
+		this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, {
+			onCompactDiagnostic: (message) => this.showWarning(message),
+			transcriptPresentation: () => this.settingsManager.getTranscriptPresentation(),
+		});
+		this.bashComponent.setExpanded(this.toolOutputExpanded);
 
 		if (isDeferred) {
 			// Show in pending area when agent is streaming

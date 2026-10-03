@@ -77,6 +77,8 @@ export type {
 	CacheWarmingDecisionEventResult,
 	CompactionEntryDraft,
 	CompactOptions,
+	CompactTranscriptHints,
+	CompactTranscriptStatus,
 	ContextEditEntryDraft,
 	ContextEvent,
 	ContextEventResult,
@@ -86,6 +88,7 @@ export type {
 	CustomMessageEntryDraft,
 	CustomToolCallEvent,
 	EditToolCallEvent,
+	EntryHintsProvider,
 	EntryRenderer,
 	EntryRenderOptions,
 	ExecOptions,
@@ -124,6 +127,7 @@ export type {
 	McpServersChangeEvent,
 	MessageEndEvent,
 	MessageEndEventResult,
+	MessageHintsProvider,
 	MessageRenderer,
 	MessageRenderOptions,
 	MessageStartEvent,
@@ -170,6 +174,8 @@ export type {
 	ToolAnnotations,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolCompactHintsInput,
+	ToolCompactHintsProvider,
 	ToolDefinition,
 	ToolExecutionEndEvent,
 	ToolExecutionMode,
@@ -387,6 +393,13 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+export type {
+	NormalizedTranscriptPresentation,
+	TranscriptKind,
+	TranscriptPolicy,
+	TranscriptPresentationMode,
+	TranscriptPresentationSettings,
+} from "./core/transcript-presentation.ts";
 export {
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,

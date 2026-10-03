@@ -87,8 +87,11 @@ const mutate = (document: MutableDocument, choice: number, value: number): void 
 	}
 };
 
-it("converges across randomized prepared revisions", () => {
-	for (let seed = 1; seed <= 100; seed++) {
+// Each independent revision sequence gets the ordinary test deadline. A single
+// deadline for all 10,000 steps was sensitive to parallel worker contention.
+it.each(Array.from({ length: 100 }, (_, index) => index + 1))(
+	"converges across randomized prepared revisions (seed %i)",
+	(seed) => {
 		const rng = random(seed);
 		const initial: Document = {
 			items: Array.from({ length: 4 }, (_, id) => ({ id, text: `item-${id}`, score: 0 })),
@@ -119,5 +122,5 @@ it("converges across randomized prepared revisions", () => {
 			expect(replica, `replica seed ${seed} step ${step} choice ${choice}`).toEqual(expected);
 			expectAliasFree(tracker.value);
 		}
-	}
-});
+	},
+);

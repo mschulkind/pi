@@ -21,6 +21,7 @@ import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } fr
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import type {
+	EntryHintsProvider,
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
@@ -29,6 +30,7 @@ import type {
 	ExtensionVirtualModel,
 	LoadExtensionsResult,
 	MarkdownTransformer,
+	MessageHintsProvider,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
@@ -352,6 +354,16 @@ function createExtensionAPI(
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 
+		registerMessageHints<T>(customType: string, provider: MessageHintsProvider<T>): void {
+			assertActive();
+			extension.messageHints ??= new Map();
+			extension.messageHints.set(customType, provider as MessageHintsProvider);
+		},
+		registerEntryHints<T>(customType: string, provider: EntryHintsProvider<T>): void {
+			assertActive();
+			extension.entryHints ??= new Map();
+			extension.entryHints.set(customType, provider as EntryHintsProvider);
+		},
 		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
 			assertActive();
 			extension.markdownTransformer = transformer;

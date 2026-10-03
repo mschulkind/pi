@@ -1,3 +1,4 @@
+import { addCompactWarning, builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the find tool.
  *
@@ -63,7 +64,22 @@ function formatFindResult(
 	return text;
 }
 
-export const findRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
+export const findRenderers: Pick<
+	ToolDefinition<any, any>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as { path?: string; pattern?: string } | undefined;
+		const details = input.result?.details as FindToolDetails | undefined;
+		const warnings: string[] = [];
+		if (details?.truncation?.truncated) warnings.push("output truncated");
+		if (details?.resultLimitReached) warnings.push(`${details.resultLimitReached} results limit`);
+
+		return addCompactWarning(
+			builtinCompactHints(input, `find ${args?.pattern ? `${args.pattern} in ` : ""}${args?.path ?? "."}`),
+			warnings.join("; ") || undefined,
+		);
+	},
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 		text.setText(formatFindCall(args as any, theme));
@@ -74,4 +90,4 @@ export const findRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 		text.setText(formatFindResult(result as any, options, theme, context.showImages));
 		return text;
 	},
-};
+});

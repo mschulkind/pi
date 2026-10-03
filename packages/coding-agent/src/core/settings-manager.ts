@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS, type Model, type Transport } from "@earendil-works/pi-ai";
 import type {
@@ -14,6 +15,11 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import {
+	type NormalizedTranscriptPresentation,
+	normalizeTranscriptPresentation,
+	type TranscriptPresentationSettings,
+} from "./transcript-presentation.ts";
 
 export interface CompactionModelOverride {
 	reserveTokens?: number;
@@ -143,6 +149,7 @@ export interface Settings {
 	compaction?: CompactionSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
+	transcriptPresentation?: TranscriptPresentationSettings;
 	hideThinkingBlock?: boolean;
 	showCacheMissNotices?: boolean; // default: false - show cache cost and provider recovery notices
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
@@ -391,6 +398,8 @@ export class SettingsManager {
 	private writeQueue: Promise<void> = Promise.resolve();
 	private errors: SettingsError[];
 	private settingsPaths: SettingsPaths;
+	private transcriptSettingsSource?: TranscriptPresentationSettings;
+	private transcriptSettingsCache?: NormalizedTranscriptPresentation;
 
 	private constructor(
 		storage: SettingsStorage,
@@ -630,6 +639,8 @@ export class SettingsManager {
 		}
 
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		// An explicit reload revalidates newly loaded configuration, even when its values are unchanged.
+		this.transcriptSettingsCache = undefined;
 	}
 
 	/** Apply additional overrides on top of current settings */
@@ -1041,6 +1052,27 @@ export class SettingsManager {
 
 	getWebSocketConnectTimeoutMs(): number | undefined {
 		return parseTimeoutSetting(this.settings.websocketConnectTimeoutMs, "websocketConnectTimeoutMs");
+	}
+
+	getTranscriptPresentation(): NormalizedTranscriptPresentation {
+		const source = this.settings.transcriptPresentation;
+		if (!this.transcriptSettingsCache || !isDeepStrictEqual(source, this.transcriptSettingsSource)) {
+			// Merging unrelated fields creates a new object; diagnostics depend on presentation values.
+			this.transcriptSettingsSource = structuredClone(source);
+			this.transcriptSettingsCache = normalizeTranscriptPresentation(source, (message) => {
+				const scope = this.projectSettings.transcriptPresentation !== undefined ? "project" : "global";
+				this.recordError(scope, new Error(message));
+			});
+		}
+		return structuredClone(this.transcriptSettingsCache);
+	}
+
+	setTranscriptPresentation(presentation: TranscriptPresentationSettings): void {
+		// Preserve omitted exception fields: they inherit the effective group after project merging.
+		this.globalSettings.transcriptPresentation = structuredClone(presentation);
+		this.markModified("transcriptPresentation");
+		this.save();
+		this.getTranscriptPresentation();
 	}
 
 	getHideThinkingBlock(): boolean {

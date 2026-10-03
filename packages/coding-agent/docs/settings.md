@@ -114,6 +114,28 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 
 See [Themes](themes.md) and [Terminal Setup](terminal-setup.md) for format and platform details.
 
+### Transcript presentation
+
+`SettingsManager.getTranscriptPresentation()` normalizes the `transcriptPresentation` group; `setTranscriptPresentation()` preserves supplied values and queues the usual settings write. The interactive transcript consumes this policy for tools, custom messages, displayed entries, extension notices, and user shell rows. `/settings` has one Transcript presentation submenu for mode and maximum lines; existing exact exceptions are retained. Edit exceptions in the settings file. Policy changes refresh existing rows without rebuilding execution state. The normalized defaults are:
+
+```json
+{
+  "transcriptPresentation": {
+    "mode": "compact",
+    "maxLines": 2,
+    "exceptions": []
+  }
+}
+```
+
+`mode` accepts `compact` or `legacy`; `maxLines` accepts integer 1–4. Each exception has an exact `kind` (`tool`, `message`, `entry`, `notice`, or `shell`) and `name`, with optional `mode` and `maxLines`. First valid duplicate wins; omitted or invalid exception fields inherit the normalized group defaults. Invalid entries are skipped, and invalid global values fall back to compact/two-line defaults with a bounded settings diagnostic.
+
+Trusted project fields merge with user fields; the exceptions array replaces, rather than extends, its inherited array. The setter retains omitted exception fields so they continue inheriting after a later override. Reads return independent copies. Recreating the merged object through an unrelated theme change does not repeat an unchanged diagnostic; an explicit reload revalidates newly loaded configuration. Read diagnostics with `drainErrors()` and await `flush()` for queued writes.
+
+`legacy` restores renderer-owned collapsed layouts and shell framing without compact line bounds. Expansion always retains existing detail, images, and interactive controls. A tool exception uses its registered name; message/entry exceptions use custom type; notices use severity; shell uses `user-shell`. Exceptions are literal exact matches, not patterns.
+
+See the [compact display contract](extensions.md#compact-display-data) for producer disclosure responsibility and redaction-safe fallback. Presentation does not change model context, session data, RPC/print results, thinking visibility, summary generation, or accounting.
+
 ## Network and retries
 
 | Setting | Type | Default | Description |

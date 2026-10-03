@@ -1,3 +1,4 @@
+import { addCompactWarning, builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the grep tool.
  *
@@ -68,7 +69,22 @@ function formatGrepResult(
 	return text;
 }
 
-export const grepRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
+export const grepRenderers: Pick<
+	ToolDefinition<any, any>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as { path?: string; pattern?: string } | undefined;
+		const details = input.result?.details as GrepToolDetails | undefined;
+		const warnings: string[] = [];
+		if (details?.truncation?.truncated) warnings.push("output truncated");
+		if (details?.matchLimitReached) warnings.push(`${details.matchLimitReached} matches limit`);
+		if (details?.linesTruncated) warnings.push("some lines truncated");
+		return addCompactWarning(
+			builtinCompactHints(input, `grep ${args?.pattern ? `${args.pattern} in ` : ""}${args?.path ?? "."}`),
+			warnings.join("; ") || undefined,
+		);
+	},
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 		text.setText(formatGrepCall(args as any, theme));
@@ -79,4 +95,4 @@ export const grepRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 		text.setText(formatGrepResult(result as any, options, theme, context.showImages));
 		return text;
 	},
-};
+});

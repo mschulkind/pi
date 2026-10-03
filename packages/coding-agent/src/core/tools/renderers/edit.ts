@@ -1,3 +1,4 @@
+import { builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the edit tool.
  *
@@ -117,6 +118,7 @@ function getEditHeaderBg(
 	settledError: boolean | undefined,
 	theme: Theme,
 ): (text: string) => string {
+	if (settledError) return (text: string) => theme.bg("toolErrorBg", text);
 	if (preview) {
 		if ("error" in preview) {
 			return (text: string) => theme.bg("toolErrorBg", text);
@@ -138,7 +140,7 @@ function buildEditCallComponent(
 	component.clear();
 	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
 
-	if (!component.preview) {
+	if (!component.preview || component.settledError) {
 		return component;
 	}
 
@@ -168,7 +170,23 @@ function setEditPreview(
 	return changed;
 }
 
-export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
+export const editRenderers: Pick<
+	ToolDefinition<any, any>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as RenderableEditArgs | undefined;
+		const hints = builtinCompactHints(input, `edit ${args?.path ?? args?.file_path ?? ""}`);
+		const diff = input.result?.details?.diff;
+		if (typeof diff === "string") {
+			const lines = diff.split("\n");
+			hints.counts = [
+				{ label: "added", value: lines.filter((line) => line.startsWith("+")).length },
+				{ label: "removed", value: lines.filter((line) => line.startsWith("-")).length },
+			];
+		}
+		return hints;
+	},
 	renderCall(args, theme, context) {
 		const component = getEditCallRenderComponent(context.state, context.lastComponent);
 		const previewInput = getRenderablePreviewInput(args as RenderableEditArgs | undefined);
@@ -181,11 +199,27 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			component.settledError = false;
 		}
 
-		if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
+		const settled = !context.isPartial && context.result;
+		if (settled) {
+			component.previewPending = false;
+			if (context.isError) component.preview = undefined;
+			const details = context.result?.details as EditToolDetails | undefined;
+			if (!context.isError && typeof details?.diff === "string")
+				setEditPreview(component, { diff: details.diff, firstChangedLine: details.firstChangedLine }, argsKey);
+			component.settledError = context.isError;
+		}
+		if (
+			!settled &&
+			!component.settledError &&
+			context.argsComplete &&
+			previewInput &&
+			!component.preview &&
+			!component.previewPending
+		) {
 			component.previewPending = true;
 			const requestKey = argsKey;
 			void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
-				if (component.previewArgsKey === requestKey) {
+				if (component.previewPending && component.previewArgsKey === requestKey) {
 					setEditPreview(component, preview, requestKey);
 					context.invalidate();
 				}
@@ -194,7 +228,7 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 
 		return buildEditCallComponent(component, args as RenderableEditArgs | undefined, theme, context.cwd);
 	},
-	renderResult(result, _options, theme, context) {
+	renderResult(result, options, theme, context) {
 		const callComponent = context.state.callComponent;
 		const previewInput = getRenderablePreviewInput(context.args as RenderableEditArgs | undefined);
 		const argsKey = previewInput ? JSON.stringify({ path: previewInput.path, edits: previewInput.edits }) : undefined;
@@ -202,6 +236,13 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 		const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
 		let changed = false;
 		if (callComponent) {
+			if (!options.isPartial || context.isError) {
+				callComponent.previewPending = false;
+				if (context.isError && callComponent.preview) {
+					callComponent.preview = undefined;
+					changed = true;
+				}
+			}
 			if (typeof resultDiff === "string") {
 				changed =
 					setEditPreview(
@@ -235,4 +276,4 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 		component.addChild(new Text(output, 1, 0));
 		return component;
 	},
-};
+});

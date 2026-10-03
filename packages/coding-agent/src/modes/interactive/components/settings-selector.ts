@@ -23,6 +23,7 @@ import {
 	type TuiMode,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
+import type { NormalizedTranscriptPresentation } from "../../../core/transcript-presentation.ts";
 import {
 	getSettingsListTheme,
 	parseAutoThemeSetting,
@@ -57,6 +58,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 );
 
 export interface SettingsConfig {
+	transcriptPresentation?: NormalizedTranscriptPresentation;
 	autoCompact: boolean;
 	defaultModel: string;
 	currentModel?: Model<any>;
@@ -101,6 +103,7 @@ export interface SettingsConfig {
 }
 
 export interface SettingsCallbacks {
+	onTranscriptPresentationChange?: (settings: NormalizedTranscriptPresentation) => void;
 	onAutoCompactChange: (enabled: boolean) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
@@ -470,6 +473,11 @@ export class SettingsSelectorComponent extends Container {
 		const followUpKey = keyDisplayText("app.message.followUp");
 		const cycleThinkingKey = keyDisplayText("app.thinking.cycle");
 		let currentWarnings = { ...config.warnings };
+		let transcriptState: NormalizedTranscriptPresentation = config.transcriptPresentation ?? {
+			mode: "compact",
+			maxLines: 2,
+			exceptions: [],
+		};
 		const currentModelThinkingLevels = { ...config.modelThinkingLevels };
 		const defaultModelByValue = new Map(
 			config.availableDefaultModels.map((model) => [modelSettingKey(model), model]),
@@ -478,6 +486,36 @@ export class SettingsSelectorComponent extends Container {
 		const currentModelKey = config.currentModel ? modelSettingKey(config.currentModel) : undefined;
 
 		const items: SettingItem[] = [
+			{
+				id: "transcript-presentation",
+				label: "Transcript presentation",
+				description: "Core-owned compact rows or renderer-owned legacy detail; exact exceptions stay in settings",
+				currentValue: config.transcriptPresentation?.mode ?? "compact",
+				submenu: (_value, done) => {
+					const menu = new SettingsList(
+						[
+							{ id: "mode", label: "Mode", currentValue: transcriptState.mode, values: ["compact", "legacy"] },
+							{
+								id: "lines",
+								label: "Maximum compact lines",
+								currentValue: String(transcriptState.maxLines),
+								values: ["1", "2", "3", "4"],
+							},
+						],
+						2,
+						getSettingsListTheme(),
+						(id, value) => {
+							transcriptState = {
+								...transcriptState,
+								...(id === "mode" ? { mode: value as "compact" | "legacy" } : { maxLines: Number(value) }),
+							};
+							callbacks.onTranscriptPresentationChange?.(transcriptState);
+						},
+						() => done(transcriptState.mode),
+					);
+					return menu;
+				},
+			},
 			{
 				id: "autocompact",
 				label: "Auto-compact",

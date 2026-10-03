@@ -1,3 +1,9 @@
+import {
+	addCompactWarning,
+	builtinCompactHints,
+	ownCompactHints,
+	registerCompactCleanup,
+} from "./compact-ownership.ts";
 /**
  * Presentation for the shell tools.
  *
@@ -106,12 +112,21 @@ function rebuildBashResultRenderComponent(
 }
 
 /** Shell renderers are shared by bash and powershell, which differ only in the prompt they display. */
-export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
-	return {
+export function createShellRenderers(
+	prompt: string,
+): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult" | "getCompactHints"> {
+	return ownCompactHints({
+		getCompactHints(input) {
+			const args = input.args as { command?: string } | undefined;
+			const hints = builtinCompactHints(input, `${prompt} ${typeof args?.command === "string" ? args.command : ""}`);
+			const path = input.result?.details?.fullOutputPath;
+			if (typeof path === "string") hints.outputPaths = [path.slice(0, 256)];
+			return addCompactWarning(hints, input.result?.details?.truncation?.truncated ? "output truncated" : undefined);
+		},
 		renderCall(args, _theme, context) {
 			const state = context.state;
 			if (context.executionStarted && state.startedAt === undefined) {
-				state.startedAt = Date.now();
+				state.startedAt = context.startedAt ?? Date.now();
 				state.endedAt = undefined;
 			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
@@ -124,13 +139,19 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 				state.interval = setInterval(() => context.invalidate(), 1000);
 			}
 			if (!options.isPartial || context.isError) {
-				state.endedAt ??= Date.now();
+				state.endedAt ??= context.endedAt ?? Date.now();
 				if (state.interval) {
 					clearInterval(state.interval);
 					state.interval = undefined;
 				}
 			}
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
+			registerCompactCleanup(component, () => {
+				if (state.interval) {
+					clearInterval(state.interval);
+					state.interval = undefined;
+				}
+			});
 			rebuildBashResultRenderComponent(
 				component,
 				result as any,
@@ -142,5 +163,5 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 			component.invalidate();
 			return component;
 		},
-	};
+	});
 }

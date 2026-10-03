@@ -134,6 +134,16 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 
+		// Display data is selected explicitly; it never changes model-facing truncation.
+		getCompactHints({ args, result, isError }) {
+			const details = result?.details as RgDetails | undefined;
+			return {
+				label: `rg ${args.pattern}`.slice(0, 160),
+				error: isError ? "search failed" : undefined,
+				counts: details ? [{ label: "matches", value: details.matchCount }] : undefined,
+				outputPaths: details?.fullOutputPath ? [details.fullOutputPath] : undefined,
+			};
+		},
 		// Custom rendering of the tool call (shown before/during execution)
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("rg "));

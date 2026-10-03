@@ -191,3 +191,7 @@ Event details moved to [JSON Event Stream](json.md).
 <a id="extension-ui-protocol"></a>
 
 Extension interaction details moved to [RPC Extension UI](rpc-extension-ui.md).
+
+## Interactive presentation is not transport
+
+The [compact transcript policy](settings.md#transcript-presentation) changes only the terminal UI. RPC tool results and session events retain their original payloads. The optional third hint argument to extension notifications is omitted from `extension_ui_request`; original message/severity delivery is unchanged.

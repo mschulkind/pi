@@ -9,6 +9,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
 import { getTextOutput, replaceTabs, str } from "../../core/tools/render-utils.ts";
+import { ownCompactHints } from "../../core/tools/renderers/compact-ownership.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { CodemodeNestedCall, CodemodeToolDetails } from "./tool.ts";
 
@@ -50,9 +51,36 @@ function formatCall(call: CodemodeNestedCall, theme: Theme): string {
 
 export const codemodeRenderers: Pick<
 	ToolDefinition<any, CodemodeToolDetails | undefined>,
-	"renderShell" | "renderCall" | "renderResult"
-> = {
+	"renderShell" | "renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
 	renderShell: "inline",
+	getCompactHints({ result, isError }) {
+		const calls = result?.details?.calls ?? [];
+		const failed = calls.filter((call) => call.status === "error");
+		const running = calls.filter((call) => call.status === "running").length;
+		const cancelled = calls.filter((call) => call.status === "cancelled").length;
+		const error = isError
+			? result?.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text)
+					.join(" ")
+			: failed.find((call) => call.error)?.error;
+		return {
+			label: "codemode",
+			status: failed.length ? "error" : running ? "running" : undefined,
+			error: error?.slice(0, 160),
+			counts: [
+				{ label: "calls", value: calls.length },
+				{ label: "failed", value: failed.length },
+				{ label: "running", value: running },
+				{ label: "cancelled", value: cancelled },
+			],
+			costUsd: calls.some((call) => call.cost !== undefined)
+				? calls.reduce((sum, call) => sum + (call.cost ?? 0), 0)
+				: undefined,
+			outputPaths: result?.details?.fullOutputPath ? [result.details.fullOutputPath.slice(0, 256)] : undefined,
+		};
+	},
 	renderCall(args, theme, context) {
 		// The code includes the `// @options:` line, so options show as part of the script.
 		const code = str((args as { code?: unknown } | undefined)?.code);
@@ -132,4 +160,4 @@ export const codemodeRenderers: Pick<
 		component.setText(sections.length > 0 ? `\n${sections.join("\n\n")}` : "");
 		return component;
 	},
-};
+});

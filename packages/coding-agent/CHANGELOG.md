@@ -4,11 +4,12 @@
 
 ### Added
 
+- Added core-owned compact transcript rows for tools, custom messages, displayed entries, extension notices, and user shell execution, with typed hint providers, bounded safe fallback, a settings submenu, and exact legacy exceptions. Expanded detail, model/session results, and RPC/print delivery remain unchanged. See [Compact display data](docs/extensions.md#compact-display-data).
 - Added opt-in local API performance files through `PI_API_PERFORMANCE_DIR`, with private file permissions, bounded scheduled writes, exit draining, inactive-run retention, session/retry correlation, and SDK health counters. Recording covers four HTTP streaming APIs; other transports and auxiliary operations produce explicit coverage notices rather than fabricated attempt counts.
 
 ### Changed
 
-- Collapsed codemode calls use an unboxed inline status showing call counts, output size, model-call cost, and failures. Expand tool output to inspect the script, nested calls, and complete output.
+- Collapsed codemode calls use the shared compact policy with aggregate nested failures/running counts, recorded costs, and output paths. Expand tool output to inspect the script, nested calls, and complete output; explicit legacy mode retains inline rendering.
 
 ### Fixed
 

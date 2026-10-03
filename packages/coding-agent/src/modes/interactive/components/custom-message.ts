@@ -1,15 +1,21 @@
 import type { TextContent } from "@earendil-works/pi-ai";
-import type { Component } from "@earendil-works/pi-tui";
-import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
-import type { MessageRenderer } from "../../../core/extensions/types.ts";
+import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import type { MessageHintsProvider, MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
+import { CompactHintsCache } from "../../../core/transcript-presentation.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { CompactTranscriptComponent } from "./compact-transcript.ts";
+import { adapterPolicy, isExpansionClick, type TranscriptAdapterOptions } from "./transcript-adapter.ts";
 
 /**
  * Component that renders a custom message entry from extensions.
  * Uses distinct styling to differentiate from user messages.
  */
 export class CustomMessageComponent extends Container {
+	private presentation: TranscriptAdapterOptions;
+	private hints = new CompactHintsCache();
+	private compact = new CompactTranscriptComponent({ identity: "", status: "info" });
 	private message: CustomMessage<unknown>;
 	private customRenderer?: MessageRenderer;
 	private box: Box;
@@ -17,14 +23,20 @@ export class CustomMessageComponent extends Container {
 	private markdownTheme: MarkdownTheme;
 	private _expanded = false;
 	private outputPad: number;
+	private detailReady = false;
 
 	constructor(
 		message: CustomMessage<unknown>,
 		customRenderer?: MessageRenderer,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		outputPad = 1,
+		presentation: TranscriptAdapterOptions = {},
+		hints?: MessageHintsProvider,
 	) {
 		super();
+		this.hints = new CompactHintsCache(presentation.onCompactDiagnostic);
+		this.presentation = presentation;
+		this.hints.update(hints, message);
 		this.message = message;
 		this.customRenderer = customRenderer;
 		this.markdownTheme = markdownTheme;
@@ -57,7 +69,48 @@ export class CustomMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	override render(width: number): string[] {
+		if (!this.message.display) return [];
+		const policy = adapterPolicy(this.presentation, "message", this.message.customType);
+		if (!this._expanded && policy.mode === "compact") {
+			this.compact.setData(
+				{ identity: this.message.customType, status: "info", hints: this.hints.hints },
+				policy.maxLines,
+			);
+			return this.compact.render(width);
+		}
+		if (!this.detailReady) this.rebuild();
+		try {
+			return super.render(width);
+		} catch {
+			return width > 0 ? [truncateToWidth("renderer unavailable", width, "")] : [];
+		}
+	}
+	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		if (
+			!this._expanded &&
+			adapterPolicy(this.presentation, "message", this.message.customType).mode === "compact" &&
+			isExpansionClick(event)
+		) {
+			this.setExpanded(true);
+			return {
+				handled: true,
+				target: {
+					component: this,
+					originX: event.screenX - event.x,
+					originY: event.screenY - event.y,
+					width: event.width,
+					height: event.height,
+				},
+			};
+		}
+		return super.handleMouse(event);
+	}
 	private rebuild(): void {
+		this.detailReady = false;
+		if (!this._expanded && adapterPolicy(this.presentation, "message", this.message.customType).mode === "compact")
+			return;
+		this.detailReady = true;
 		// Remove previous content component
 		if (this.customComponent) {
 			this.removeChild(this.customComponent);
@@ -79,8 +132,11 @@ export class CustomMessageComponent extends Container {
 					this.addChild(component);
 					return;
 				}
+				return;
 			} catch {
-				// Fall through to default rendering
+				this.customComponent = new Text("renderer unavailable", 0, 0);
+				this.addChild(this.customComponent);
+				return;
 			}
 		}
 

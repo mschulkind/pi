@@ -192,3 +192,7 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 | `app.models.toggleProvider` | `ctrl+p` | Toggle all models for the current provider |
 | `app.models.reorderUp` | `alt+up` | Move the selected model up in the cycle order |
 | `app.models.reorderDown` | `alt+down` | Move the selected model down in the cycle order |
+
+## Compact transcript expansion
+
+`app.tools.expand` (Ctrl+O by default) expands tools, displayed custom messages/entries, extension notices, and user shell rows. Compact rows also expand on primary-button click in fullscreen mode. Thinking visibility and thinking summary controls remain independent. [Presentation settings](settings.md#transcript-presentation) restore renderer-owned legacy collapse without changing keybindings.

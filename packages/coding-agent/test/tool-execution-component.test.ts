@@ -13,6 +13,7 @@ import { type BashOperations, createBashToolDefinition } from "../src/core/tools
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { normalizeTranscriptPresentation } from "../src/core/transcript-presentation.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -63,6 +64,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 
 		component.updateResult(
 			{ content: [{ type: "image", data: "partial-jpeg", mimeType: "image/jpeg" }], isError: false },
@@ -98,6 +100,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom call");
 
 		component.updateResult(
@@ -125,7 +128,7 @@ describe("ToolExecutionComponent parity", () => {
 			"custom_tool",
 			"tool-inline",
 			{},
-			{},
+			{ transcriptPresentation: () => normalizeTranscriptPresentation({ mode: "legacy" }) },
 			toolDefinition,
 			createFakeTui(),
 			process.cwd(),
@@ -156,7 +159,7 @@ describe("ToolExecutionComponent parity", () => {
 			"custom_tool",
 			"tool-inline-color",
 			{},
-			{},
+			{ transcriptPresentation: () => normalizeTranscriptPresentation({ mode: "legacy" }) },
 			toolDefinition,
 			createFakeTui(),
 			process.cwd(),
@@ -182,7 +185,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
-		expect(component.render(120)).toEqual([]);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom_tool");
 
 		component.updateResult(
 			{
@@ -193,7 +196,7 @@ describe("ToolExecutionComponent parity", () => {
 			false,
 		);
 
-		expect(component.render(120)).toEqual([]);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom_tool");
 	});
 
 	test("uses built-in rendering for built-in overrides without custom renderers", () => {
@@ -210,6 +213,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [], details: { diff: "+1 after", firstChangedLine: 1 }, isError: false });
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("edit");
@@ -227,6 +231,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
 		expect(rendered).toContain("README.md");
@@ -313,6 +318,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.markExecutionStarted();
 		component.updateResult({ content: [], isError: false }, true);
 
@@ -398,6 +404,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
@@ -420,6 +427,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("override call");
@@ -443,6 +451,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("wrapped override call");
@@ -471,6 +480,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
@@ -494,6 +504,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("arg:bar");
@@ -512,8 +523,8 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		const collapsed = stripAnsi(component.render(300).join("\n"));
-		expect(collapsed).toContain('custom_tool query="pi" long="xxx');
-		expect(collapsed).toContain("...");
+		expect(collapsed).toContain("custom_tool");
+		expect(collapsed).not.toContain("query=");
 		expect(collapsed).not.toContain(longValue);
 
 		component.setExpanded(true);
@@ -545,9 +556,9 @@ describe("ToolExecutionComponent parity", () => {
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("custom_tool");
-		expect(collapsed).toContain("line-10");
+		expect(collapsed).toContain("completed");
+		expect(collapsed).not.toContain("line-10");
 		expect(collapsed).not.toContain("line-11");
-		expect(collapsed).toContain("5 more lines");
 		expect(collapsed).toContain("to expand");
 
 		component.setExpanded(true);
@@ -566,6 +577,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("one");
 		expect(rendered).toContain("two");
@@ -603,6 +615,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		const error = "Offset 120 is beyond end of file (96 lines total)";
 		component.updateResult({ content: [{ type: "text", text: error }], details: undefined, isError: true }, false);
 

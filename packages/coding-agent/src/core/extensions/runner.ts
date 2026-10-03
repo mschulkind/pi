@@ -40,6 +40,7 @@ import type {
 	ContextEventResult,
 	ContextUsage,
 	ContextWithSystemEvent,
+	EntryHintsProvider,
 	EntryRenderer,
 	ExecuteToolOptions,
 	Extension,
@@ -63,6 +64,7 @@ import type {
 	MarkdownTransformer,
 	MessageEndEvent,
 	MessageEndEventResult,
+	MessageHintsProvider,
 	MessageRenderer,
 	ProjectTrustContext,
 	ProjectTrustEvent,
@@ -783,6 +785,12 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
+	getMessageHints(customType: string): MessageHintsProvider | undefined {
+		return this.extensions.map((ext) => ext.messageHints?.get(customType)).find((provider) => provider !== undefined);
+	}
+	getEntryHints(customType: string): EntryHintsProvider | undefined {
+		return this.extensions.map((ext) => ext.entryHints?.get(customType)).find((provider) => provider !== undefined);
+	}
 	getMarkdownTransformers(): MarkdownTransformer[] {
 		return this.extensions.flatMap((ext) => (ext.markdownTransformer ? [ext.markdownTransformer] : []));
 	}

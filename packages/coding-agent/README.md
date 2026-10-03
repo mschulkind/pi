@@ -68,3 +68,7 @@ Read [CONTRIBUTING.md](https://github.com/earendil-works/pi/blob/main/CONTRIBUTI
 ## License
 
 MIT
+
+## Compact transcript
+
+Interactive tools, custom messages, displayed entries, extension notices, and user shell execution use core-owned compact rows, two visual lines by default. Ctrl+O expands the original detail. [Settings](docs/settings.md#transcript-presentation) support exact legacy exceptions; [extensions](docs/extensions.md#compact-display-data) can supply safe semantic hints. Thinking and non-transcript UI remain independent.

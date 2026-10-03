@@ -148,12 +148,14 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		const header = { setExpanded: vi.fn() };
 		const loadedResourcesChild = { setExpanded: vi.fn() };
 		const chatChild = { setExpanded: vi.fn() };
+		const pendingShellChild = { setExpanded: vi.fn() };
 		const fakeThis: any = {
 			toolOutputExpanded: false,
 			customHeader: undefined,
 			builtInHeader: header,
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
+			pendingMessagesContainer: { children: [pendingShellChild] },
 			ui: { requestRender: vi.fn() },
 			showStatus: vi.fn(),
 		};
@@ -164,6 +166,7 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
+		expect(pendingShellChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
 	});
 });

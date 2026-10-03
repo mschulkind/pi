@@ -51,6 +51,8 @@ export type {
 	CompactionEntryDraft,
 	// Context
 	CompactOptions,
+	CompactTranscriptHints,
+	CompactTranscriptStatus,
 	ContextEditEntryDraft,
 	// Events - Agent
 	ContextEvent,
@@ -66,6 +68,7 @@ export type {
 	EditToolCallEvent,
 	EditToolResultEvent,
 	// Message and Entry Rendering
+	EntryHintsProvider,
 	EntryRenderer,
 	EntryRenderOptions,
 	ExecOptions,
@@ -117,6 +120,7 @@ export type {
 	// Events - Message
 	MessageEndEvent,
 	MessageEndEventResult,
+	MessageHintsProvider,
 	MessageRenderer,
 	MessageRenderOptions,
 	MessageStartEvent,
@@ -176,6 +180,8 @@ export type {
 	ToolCallEvent,
 	ToolCallEventResult,
 	// Tools
+	ToolCompactHintsInput,
+	ToolCompactHintsProvider,
 	ToolDefinition,
 	// Events - Tool Execution
 	ToolExecutionEndEvent,

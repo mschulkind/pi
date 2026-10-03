@@ -29,6 +29,9 @@ const resourceLoader = new DefaultResourceLoader({
 	additionalExtensionPaths: ["./my-logging-extension.ts", "./my-safety-extension.ts"],
 	extensionFactories: [
 		(pi) => {
+			pi.registerMessageHints<{ count: number }>("scan", (message) => ({
+				counts: [{ label: "items", value: message.details?.count ?? 0 }],
+			}));
 			pi.on("agent_start", () => {
 				console.log("[Inline Extension] Agent starting");
 			});
@@ -82,6 +85,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			input: Type.String(),
 		}),
+ getCompactHints: ({args}) => ({label: "my_tool", summary: args.input.slice(0,160)}),
 		execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => ({
 			content: [{ type: "text", text: \`Processed: \${params.input}\` }],
 			details: {},

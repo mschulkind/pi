@@ -145,3 +145,7 @@ See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tool
 - [Sessions and Context](sessions.md) explains session behavior; [Session Format](session-format.md) defines persisted entries; [Message Types](message-types.md) defines shared transcript values.
 - [Extensions](extensions.md), [Skills](skills.md), and [Prompt Templates](prompt-templates.md) document resources supplied through a `ResourceLoader`.
 - [CLI Integration](cli-integration.md) covers print, JSON, and RPC alternatives to an in-process SDK integration.
+
+## Interactive display data
+
+Tool definitions can provide `getCompactHints`; extensions can register typed message and entry providers. These [display contracts](extensions.md#compact-display-data) apply only when an interactive host renders the transcript. SDK results, event delivery, model context, and stored sessions remain unchanged; hints are not persisted.

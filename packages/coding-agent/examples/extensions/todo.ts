@@ -218,6 +218,16 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 
+		getCompactHints({ args, result }) {
+			const details = result?.details as TodoDetails | undefined;
+			return {
+				label: `todo ${args.action}`,
+				error: details?.error,
+				progress: details
+					? { completed: details.todos.filter((todo) => todo.done).length, total: details.todos.length }
+					: undefined,
+			};
+		},
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
 			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;

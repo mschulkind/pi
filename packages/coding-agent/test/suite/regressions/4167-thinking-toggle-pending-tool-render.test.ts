@@ -164,6 +164,11 @@ describe("InteractiveMode.renderSessionEntries", () => {
 		});
 
 		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(false);
+		expect(renderChat(fakeThis.chatContainer)).toContain("completed");
+		expect(renderChat(fakeThis.chatContainer)).not.toContain("FINAL_RESULT");
+		for (const child of fakeThis.chatContainer.children) {
+			if ("setExpanded" in child && typeof child.setExpanded === "function") child.setExpanded(true);
+		}
 		expect(renderChat(fakeThis.chatContainer)).toContain("FINAL_RESULT");
 	});
 
@@ -179,6 +184,11 @@ describe("InteractiveMode.renderSessionEntries", () => {
 		);
 
 		expect(fakeThis.pendingTools.size).toBe(0);
+		expect(renderChat(fakeThis.chatContainer)).toContain("completed");
+		expect(renderChat(fakeThis.chatContainer)).not.toContain("HISTORICAL_RESULT");
+		for (const child of fakeThis.chatContainer.children) {
+			if ("setExpanded" in child && typeof child.setExpanded === "function") child.setExpanded(true);
+		}
 		expect(renderChat(fakeThis.chatContainer)).toContain("HISTORICAL_RESULT");
 	});
 });

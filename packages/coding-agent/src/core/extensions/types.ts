@@ -99,10 +99,12 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { CompactTranscriptHints } from "../transcript-presentation.ts";
 import type { ModelRoute, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
+export type { CompactTranscriptHints, CompactTranscriptStatus } from "../transcript-presentation.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 
@@ -168,7 +170,7 @@ export interface ExtensionUIContext {
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
 	/** Show a notification to the user. */
-	notify(message: string, type?: "info" | "warning" | "error"): void;
+	notify(message: string, type?: "info" | "warning" | "error", hints?: CompactTranscriptHints): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
@@ -484,6 +486,11 @@ export interface ToolRenderResultOptions {
 
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> {
+	/** Core execution clocks, independent of renderer initialization and expansion. */
+	startedAt?: number;
+	endedAt?: number;
+	/** Latest accepted result, available before call rendering on first expansion. */
+	result?: AgentToolResult<unknown>;
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -578,6 +585,22 @@ export interface ToolLoadoutChanges {
 	hiddenDeclarations?: readonly string[];
 }
 
+/** Read-only presentation input. Callbacks run on input events, not terminal frames. */
+export interface ToolCompactHintsInput<TArgs = unknown, TDetails = unknown> {
+	readonly args: TArgs;
+	readonly result?: AgentToolResult<TDetails>;
+	readonly toolCallId: string;
+	readonly cwd: string;
+	readonly argsComplete: boolean;
+	readonly executionStarted: boolean;
+	readonly isPartial: boolean;
+	readonly isError: boolean;
+}
+
+export type ToolCompactHintsProvider<TArgs = unknown, TDetails = unknown> = (
+	input: ToolCompactHintsInput<TArgs, TDetails>,
+) => CompactTranscriptHints | undefined;
+
 /**
  * Tool definition for registerTool().
  */
@@ -650,6 +673,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
 		ctx: ExtensionToolContext,
 	): Promise<AgentToolResult<TDetails>>;
+
+	/** Optional safe display data for core-owned collapsed rows. Synchronous; no I/O or model calls. */
+	getCompactHints?: ToolCompactHintsProvider<Static<TParams>, TDetails>;
 
 	/** Custom rendering for tool call display */
 	renderCall?: (args: Static<TParams>, theme: Theme, context: ToolRenderContext<TState, Static<TParams>>) => Component;
@@ -1517,6 +1543,9 @@ export interface EntryRenderOptions {
 	expanded: boolean;
 }
 
+export type MessageHintsProvider<T = unknown> = (message: CustomMessage<T>) => CompactTranscriptHints | undefined;
+export type EntryHintsProvider<T = unknown> = (entry: CustomEntry<T>) => CompactTranscriptHints | undefined;
+
 export type MessageRenderer<T = unknown> = (
 	message: CustomMessage<T>,
 	options: MessageRenderOptions,
@@ -1680,6 +1709,8 @@ export interface ExtensionAPI {
 
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
+	registerMessageHints<T = unknown>(customType: string, provider: MessageHintsProvider<T>): void;
+	registerEntryHints<T = unknown>(customType: string, provider: EntryHintsProvider<T>): void;
 
 	/** Register a transformer for user and assistant Markdown before Pi renders it in the interactive transcript. */
 	registerMarkdownTransformer(transformer: MarkdownTransformer): void;
@@ -2235,6 +2266,8 @@ export interface Extension {
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
+	messageHints?: Map<string, MessageHintsProvider>;
+	entryHints?: Map<string, EntryHintsProvider>;
 	messageRenderers: Map<string, MessageRenderer>;
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;

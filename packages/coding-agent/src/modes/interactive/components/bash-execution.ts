@@ -1,3 +1,7 @@
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { validateCompactHints } from "../../../core/transcript-presentation.ts";
+import { CompactTranscriptComponent } from "./compact-transcript.ts";
+import { adapterPolicy, isExpansionClick, type TranscriptAdapterOptions } from "./transcript-adapter.ts";
 /**
  * Component for displaying bash command execution with streaming output.
  */
@@ -19,6 +23,9 @@ import { truncateToVisualLines } from "./visual-truncate.ts";
 const PREVIEW_LINES = 20;
 
 export class BashExecutionComponent extends Container {
+	private presentation: TranscriptAdapterOptions;
+	private excluded: boolean;
+	private compact = new CompactTranscriptComponent({ identity: "user-shell", status: "running" });
 	private command: string;
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
@@ -29,8 +36,10 @@ export class BashExecutionComponent extends Container {
 	private expanded = false;
 	private contentContainer: Container;
 
-	constructor(command: string, ui: TUI, excludeFromContext = false) {
+	constructor(command: string, ui: TUI, excludeFromContext = false, presentation: TranscriptAdapterOptions = {}) {
 		super();
+		this.presentation = presentation;
+		this.excluded = excludeFromContext;
 		this.command = command;
 
 		// Use dim border for excluded-from-context commands (!! prefix)
@@ -64,6 +73,42 @@ export class BashExecutionComponent extends Container {
 		this.addChild(new DynamicBorder(borderColor));
 	}
 
+	override render(width: number): string[] {
+		const policy = adapterPolicy(this.presentation, "shell", "user-shell");
+		if (!this.expanded && policy.mode === "compact") {
+			this.compact.setData(
+				{
+					identity: "user-shell",
+					status: this.status === "complete" ? "completed" : this.status,
+					hints: validateCompactHints({
+						label: this.command.slice(0, 160),
+						summary: this.excluded ? "excluded from context" : undefined,
+						error: this.status === "error" ? `exit ${this.exitCode}` : undefined,
+						outputPaths: this.fullOutputPath ? [this.fullOutputPath.slice(0, 256)] : undefined,
+					}),
+				},
+				policy.maxLines,
+			);
+			return this.compact.render(width);
+		}
+		return super.render(width);
+	}
+	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		if (!this.expanded && isExpansionClick(event)) {
+			this.setExpanded(true);
+			return {
+				handled: true,
+				target: {
+					component: this,
+					originX: event.screenX - event.x,
+					originY: event.screenY - event.y,
+					width: event.width,
+					height: event.height,
+				},
+			};
+		}
+		return super.handleMouse(event);
+	}
 	/**
 	 * Set whether the output is expanded (shows full output) or collapsed (preview only).
 	 */

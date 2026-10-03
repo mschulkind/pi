@@ -1,3 +1,4 @@
+import { addCompactWarning, builtinCompactHints, ownCompactHints } from "./compact-ownership.ts";
 /**
  * Presentation for the ls tool.
  *
@@ -56,7 +57,22 @@ function formatLsResult(
 	return text;
 }
 
-export const lsRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
+export const lsRenderers: Pick<
+	ToolDefinition<any, any>,
+	"renderCall" | "renderResult" | "getCompactHints"
+> = ownCompactHints({
+	getCompactHints(input) {
+		const args = input.args as { path?: string; pattern?: string } | undefined;
+		const details = input.result?.details as LsToolDetails | undefined;
+		const warnings: string[] = [];
+		if (details?.truncation?.truncated) warnings.push("output truncated");
+		if (details?.entryLimitReached) warnings.push(`${details.entryLimitReached} entries limit`);
+
+		return addCompactWarning(
+			builtinCompactHints(input, `ls ${args?.pattern ? `${args.pattern} in ` : ""}${args?.path ?? "."}`),
+			warnings.join("; ") || undefined,
+		);
+	},
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 		text.setText(formatLsCall(args as any, theme, context.cwd));
@@ -67,4 +83,4 @@ export const lsRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderR
 		text.setText(formatLsResult(result as any, options, theme, context.showImages));
 		return text;
 	},
-};
+});
