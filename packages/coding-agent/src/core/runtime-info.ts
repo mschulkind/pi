@@ -1,5 +1,6 @@
 import { url as inspectorUrl } from "node:inspector";
 import { basename } from "node:path";
+import { getCoreTelemetryStatus } from "./core-telemetry.ts";
 import type { Extension } from "./extensions/types.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { runtimeBuildIdentity } from "./runtime-build.ts";
@@ -16,6 +17,7 @@ export function getRuntimeInfo(runtime: ModelRuntime, loadedExtensions: readonly
 			...getLoadedExtensionIdentity(extension),
 		})),
 		transport: runtime.getTransportRecordingStatus(),
+		responsiveness: getCoreTelemetryStatus(),
 		inspector: {
 			status: existingInspector ? ("active" as const) : ("disabled" as const),
 			origin: existingInspector ? ("existing_origin_unknown" as const) : ("not_started" as const),
@@ -40,6 +42,8 @@ export function formatRuntimeInfo(info: ReturnType<typeof getRuntimeInfo>): stri
 		),
 		`Transport: capability=${info.transport.capabilityVersion} enabled=${info.transport.enabled} coverage=${info.transport.coverage}`,
 		`Observed recorder health: ${info.transport.observedHealth ? JSON.stringify(info.transport.observedHealth) : "unavailable"}`,
+		`Core responsiveness: capability=${info.responsiveness.capabilityVersion} configured=${info.responsiveness.configured} live=${info.responsiveness.live} reason=${info.responsiveness.reason} coverage=${info.responsiveness.coverage}`,
+		`Observed responsiveness health: ${info.responsiveness.health ? JSON.stringify(info.responsiveness.health) : "unavailable"}`,
 		`Inspector: ${info.inspector.status}; origin=${info.inspector.origin}; ${info.inspector.automaticEnablement}`,
 	].join("\n");
 }

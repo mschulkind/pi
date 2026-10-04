@@ -13,6 +13,7 @@
 
 import * as crypto from "node:crypto";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import { stopCoreTelemetry } from "../../core/core-telemetry.ts";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -730,6 +731,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
 		if (shuttingDown) {
+			await stopCoreTelemetry();
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
@@ -744,6 +746,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		if (signal !== "SIGTERM") {
 			await flushRawStdout();
 		}
+		await stopCoreTelemetry();
 		process.exit(exitCode);
 	}
 

@@ -77,6 +77,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
+import { stopCoreTelemetry } from "../../core/core-telemetry.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -4326,6 +4327,7 @@ export class InteractiveMode {
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
+			await stopCoreTelemetry();
 			process.exit(0);
 		}
 
@@ -4345,11 +4347,13 @@ export class InteractiveMode {
 			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
 		}
 
+		await stopCoreTelemetry();
 		process.exit(0);
 	}
 
 	private emergencyTerminalExit(): never {
 		this.isShuttingDown = true;
+		void stopCoreTelemetry();
 		this.unregisterSignalHandlers();
 		killTrackedDetachedChildren();
 		// The terminal is gone. Do not run normal shutdown because TUI and
@@ -4369,6 +4373,7 @@ export class InteractiveMode {
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
 	private uncaughtCrash(error: Error): never {
+		void stopCoreTelemetry();
 		if (this.isShuttingDown) {
 			process.exit(1);
 		}
@@ -7159,5 +7164,6 @@ export class InteractiveMode {
 			this.isInitialized = false;
 		}
 		this.unregisterSignalHandlers();
+		void stopCoreTelemetry();
 	}
 }

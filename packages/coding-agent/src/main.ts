@@ -42,6 +42,7 @@ import {
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
+import { startCoreTelemetry, stopCoreTelemetry } from "./core/core-telemetry.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -944,55 +945,60 @@ export async function main(args: string[], options?: MainOptions) {
 			.finally(() => clearTimeout(timeout));
 	}
 
-	if (appMode === "rpc") {
-		printTimings();
-		await runRpcMode(runtime);
-	} else if (appMode === "interactive") {
-		const interactiveMode = new InteractiveMode(runtime, {
-			migratedProviders,
-			startupDiagnostics,
-			modelFallbackMessage,
-			autoTrustOnReloadCwd,
-			initialMessage,
-			initialImages,
-			initialMessages: parsed.messages,
-			verbose: parsed.verbose,
-			tuiMode: parsed.tuiMode,
-			initialThemeSetting: parsed.useTheme,
-		});
-		if (startupBenchmark) {
-			await interactiveMode.init();
-			time("interactiveMode.init");
-			// Give the TUI's stdin handler a brief chance to consume terminal query replies
-			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
-			await new Promise((resolve) => setTimeout(resolve, 150));
-			interactiveMode.stop();
-			stopThemeWatcher();
+	startCoreTelemetry();
+	try {
+		if (appMode === "rpc") {
 			printTimings();
-			if (process.stdout.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+			await runRpcMode(runtime);
+		} else if (appMode === "interactive") {
+			const interactiveMode = new InteractiveMode(runtime, {
+				migratedProviders,
+				startupDiagnostics,
+				modelFallbackMessage,
+				autoTrustOnReloadCwd,
+				initialMessage,
+				initialImages,
+				initialMessages: parsed.messages,
+				verbose: parsed.verbose,
+				tuiMode: parsed.tuiMode,
+				initialThemeSetting: parsed.useTheme,
+			});
+			if (startupBenchmark) {
+				await interactiveMode.init();
+				time("interactiveMode.init");
+				// Give the TUI's stdin handler a brief chance to consume terminal query replies
+				// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				interactiveMode.stop();
+				stopThemeWatcher();
+				printTimings();
+				if (process.stdout.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+				}
+				if (process.stderr.writableLength > 0) {
+					await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+				}
+				return;
 			}
-			if (process.stderr.writableLength > 0) {
-				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+
+			printTimings();
+			await interactiveMode.run();
+		} else {
+			printTimings();
+			const exitCode = await runPrintMode(runtime, {
+				mode: toPrintOutputMode(appMode),
+				messages: parsed.messages,
+				initialMessage,
+				initialImages,
+			});
+			stopThemeWatcher();
+			restoreStdout();
+			if (exitCode !== 0) {
+				process.exitCode = exitCode;
 			}
 			return;
 		}
-
-		printTimings();
-		await interactiveMode.run();
-	} else {
-		printTimings();
-		const exitCode = await runPrintMode(runtime, {
-			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
-		});
-		stopThemeWatcher();
-		restoreStdout();
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
-		return;
+	} finally {
+		await stopCoreTelemetry();
 	}
 }

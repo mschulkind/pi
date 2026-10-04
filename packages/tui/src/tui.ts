@@ -4,6 +4,7 @@
 
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
+import { getTuiResponsivenessObservation } from "./responsiveness.ts";
 import type { Terminal } from "./terminal.ts";
 import {
 	parseOscColorResponse,
@@ -504,6 +505,9 @@ export abstract class TuiBase extends Container implements TUI {
 	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
+	private responsivenessRequestedAt: number | undefined;
+	private responsivenessGeneration = 0;
+	private responsivenessTerminalStarted = false;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	private showHardwareCursor = false;
 	private clearOnShrink = false;
@@ -917,10 +921,11 @@ export abstract class TuiBase extends Container implements TUI {
 		this.stopped = false;
 		this.beforeTerminalStart();
 		this.terminal.start(
-			(data) => this.handleTerminalInput(data),
+			(data) => this.dispatchTerminalInput(data),
 			() => this.requestRender(),
 		);
 		this.afterTerminalStart();
+		this.responsivenessTerminalStarted = true;
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
@@ -969,6 +974,15 @@ export abstract class TuiBase extends Container implements TUI {
 
 	stop(options: TuiStopOptions = {}): void {
 		this.stopped = true;
+		this.responsivenessTerminalStarted = false;
+		const observation = getTuiResponsivenessObservation();
+		if (
+			observation &&
+			this.responsivenessRequestedAt !== undefined &&
+			this.responsivenessGeneration === observation.generation
+		)
+			observation.emit("render_cancelled", 0);
+		this.responsivenessRequestedAt = undefined;
 		this.cancelRenderTimer();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
@@ -984,10 +998,11 @@ export abstract class TuiBase extends Container implements TUI {
 		this.renderRequested = false;
 		this.cancelRenderTimer();
 		this.lastRenderAt = performance.now();
-		this.doRender();
+		this.performRender();
 	}
 
 	requestRender(force = false): void {
+		if (!force) this.observeRenderRequest();
 		if (force) {
 			this.resetRenderState();
 			this.requestImmediateRender();
@@ -999,6 +1014,7 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	private requestImmediateRender(): void {
+		this.observeRenderRequest();
 		this.cancelRenderTimer();
 		this.renderRequested = true;
 		if (this.immediateRenderScheduled) return;
@@ -1011,7 +1027,7 @@ export abstract class TuiBase extends Container implements TUI {
 			this.cancelRenderTimer();
 			this.renderRequested = false;
 			this.lastRenderAt = performance.now();
-			this.doRender();
+			this.performRender();
 		});
 	}
 
@@ -1034,11 +1050,63 @@ export abstract class TuiBase extends Container implements TUI {
 			}
 			this.renderRequested = false;
 			this.lastRenderAt = performance.now();
-			this.doRender();
+			this.performRender();
 			if (this.renderRequested) {
 				this.scheduleRender();
 			}
 		}, delay);
+	}
+
+	private observeRenderRequest(): void {
+		const observation = getTuiResponsivenessObservation();
+		if (!observation || this.stopped) return;
+		observation.emit("render_request", 0);
+		if (this.responsivenessRequestedAt !== undefined && this.responsivenessGeneration === observation.generation)
+			observation.emit("render_coalesced", 0);
+		else {
+			this.responsivenessRequestedAt = performance.now();
+			this.responsivenessGeneration = observation.generation;
+		}
+	}
+
+	private performRender(): void {
+		const observation = getTuiResponsivenessObservation();
+		if (!observation || !this.responsivenessTerminalStarted || this.stopped) {
+			this.doRender();
+			return;
+		}
+		const waitEnded = performance.now();
+		if (this.responsivenessRequestedAt !== undefined && this.responsivenessGeneration === observation.generation)
+			observation.emit("render_wait", waitEnded - this.responsivenessRequestedAt);
+		this.responsivenessRequestedAt = undefined;
+		const fullRedraws = this.fullRedrawCount;
+		const started = performance.now();
+		let completed = false;
+		try {
+			this.doRender();
+			completed = true;
+		} finally {
+			observation.emit("render", performance.now() - started);
+			if (!completed) observation.emit("render_error", 0);
+			if (this.fullRedrawCount > fullRedraws) observation.emit("full_redraw", 0);
+		}
+	}
+
+	private dispatchTerminalInput(data: string): void {
+		const observation = getTuiResponsivenessObservation();
+		if (!observation) {
+			this.handleTerminalInput(data);
+			return;
+		}
+		const started = performance.now();
+		let completed = false;
+		try {
+			this.handleTerminalInput(data);
+			completed = true;
+		} finally {
+			observation.emit("input_dispatch", performance.now() - started);
+			if (!completed) observation.emit("input_dispatch_error", 0);
+		}
 	}
 
 	private handleTerminalInput(data: string): void {
