@@ -375,6 +375,7 @@
           const entry = flatNode.node.entry;
           const label = flatNode.node.label;
           const isCurrentLeaf = entry.id === currentLeafId;
+          if (entry.type === 'custom' && entry.customType === 'pi.core-responsiveness') return false;
 
           // Always show current leaf
           if (isCurrentLeaf) return true;

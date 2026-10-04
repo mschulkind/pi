@@ -77,6 +77,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { type CoreTelemetry, createCoreTelemetry } from "./core-telemetry.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -459,6 +460,8 @@ export class AgentSession {
 	/** Prompt options after before_agent_start mutations for the active run. */
 	private _runSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
 
+	readonly coreTelemetry: CoreTelemetry | undefined;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -495,6 +498,7 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 		if (this._initialActiveToolNames === undefined) this._restoreToolsFromTranscript();
+		this.coreTelemetry = createCoreTelemetry(this.sessionManager);
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -1361,6 +1365,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this.coreTelemetry?.close();
 		try {
 			this.abortRetry();
 			this.abortCompaction();

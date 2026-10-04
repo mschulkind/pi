@@ -6,7 +6,7 @@
 
 - Added core-owned compact transcript rows for tools, custom messages, displayed entries, extension notices, and user shell execution, with typed hint providers, bounded safe fallback, a settings submenu, and exact legacy exceptions. Expanded detail, model/session results, and RPC/print delivery remain unchanged. See [Compact display data](docs/extensions.md#compact-display-data).
 - Added opt-in local API performance files through `PI_API_PERFORMANCE_DIR`, with private file permissions, bounded scheduled writes, exit draining, inactive-run retention, session/retry correlation, and SDK health counters. Recording covers four HTTP streaming APIs; other transports and auxiliary operations produce explicit coverage notices rather than fabricated attempt counts.
-- Added default-off core responsiveness windows with `PI_CORE_TELEMETRY=1` and an absolute `PI_CORE_TELEMETRY_DIR`: event-loop delay, actual TUI dispatch/render durations, scheduling wait and coalescing, bounded asynchronous private storage, and configuration/live/observed health in `/runtime`. See [Core responsiveness](https://github.com/mschulkind/pi/blob/main/docs/core-responsiveness/implementation.md).
+- Added default-on core responsiveness metadata in ordinary session history: process event-loop delay, owned TUI dispatch/render durations, scheduling wait and coalescing, bounded buffered checkpoints piggybacked on existing synchronous history commits, and actual-session health in `/runtime`. Only `PI_CORE_TELEMETRY=0` disables recording; `PI_CORE_TELEMETRY_DIR` is ignored. No standalone capture files or ten-minute lifetime cap. See [Core responsiveness](https://github.com/mschulkind/pi/blob/main/docs/core-responsiveness/implementation.md).
 
 ### Changed
 

@@ -975,7 +975,7 @@ export abstract class TuiBase extends Container implements TUI {
 	stop(options: TuiStopOptions = {}): void {
 		this.stopped = true;
 		this.responsivenessTerminalStarted = false;
-		const observation = getTuiResponsivenessObservation();
+		const observation = getTuiResponsivenessObservation(this);
 		if (
 			observation &&
 			this.responsivenessRequestedAt !== undefined &&
@@ -1058,7 +1058,7 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	private observeRenderRequest(): void {
-		const observation = getTuiResponsivenessObservation();
+		const observation = getTuiResponsivenessObservation(this);
 		if (!observation || this.stopped) return;
 		observation.emit("render_request", 0);
 		if (this.responsivenessRequestedAt !== undefined && this.responsivenessGeneration === observation.generation)
@@ -1070,7 +1070,7 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	private performRender(): void {
-		const observation = getTuiResponsivenessObservation();
+		const observation = getTuiResponsivenessObservation(this);
 		if (!observation || !this.responsivenessTerminalStarted || this.stopped) {
 			this.doRender();
 			return;
@@ -1093,7 +1093,7 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	private dispatchTerminalInput(data: string): void {
-		const observation = getTuiResponsivenessObservation();
+		const observation = getTuiResponsivenessObservation(this);
 		if (!observation) {
 			this.handleTerminalInput(data);
 			return;

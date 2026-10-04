@@ -8,7 +8,6 @@
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
-import { stopCoreTelemetry } from "../core/core-telemetry.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { toJsonEvent } from "./json-event.ts";
@@ -58,7 +57,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(async () => {
-					await stopCoreTelemetry();
+					runtimeHost.session.coreTelemetry?.close();
 					process.exit(signal === "SIGHUP" ? 129 : 143);
 				});
 			};

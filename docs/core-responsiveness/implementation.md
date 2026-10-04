@@ -1,155 +1,82 @@
 ---
-status: in-review
+status: awaiting-review
 ---
 
-# Core responsiveness producer contract
+# Core responsiveness in ordinary session history
 
-## Activation and lifecycle
+Core metadata is default-on everywhere. Only `PI_CORE_TELEMETRY=0` disables it.
+`PI_CORE_TELEMETRY_DIR` is deprecated and ignored; `YOLO_DURABLE_DIR` is not an
+activation condition. Inspector/profiling, API attempt files, workflow journals
+and scanners remain unchanged. No separate files/locks or synthetic sessions.
 
-For a future accepted installation, launch Pi with `PI_CORE_TELEMETRY=1` and
-an absolute `PI_CORE_TELEMETRY_DIR` naming a dedicated private directory. All
-other switch values disable capture, including `0`, regardless of directory or
-`YOLO_DURABLE_DIR`. This change does not auto-enable in a jail or inspect Yolo.
-The parent owns build/installation verification; no deploy or restart was run.
+## Approved durability contract
 
-`main.ts` starts one process capture immediately before executing its interactive,
-RPC or print mode and awaits close in `finally`. Early CLI setup/help paths are
-not covered. Graceful hard exits also await bounded close: interactive quit/
-signals, RPC stdin EOF/extension shutdown/signals, and print SIGTERM/SIGHUP.
-Existing disposal/output ordering and exit codes are preserved.
-`InteractiveMode.stop()`, crash and dead-terminal paths detach immediately
-without delaying terminal cleanup. Repeated live starts share one recorder;
-repeat starts after awaited stop get fresh health, observers and histogram.
+See [the settled plan](plan.md). SessionManager's existing normal commits are
+synchronous. The parent approved bounded buffering and piggyback on those
+commits, plus a bounded metadata-only final append to an already-created
+conversation file. This is deliberately **not asynchronous history persistence**.
+No timer/input/render callback flushes telemetry disk; callback observers update
+scalars only. Metadata-only failures are nonfatal; ordinary commit failures keep
+their existing semantics. Idle metadata is not immediately durable. No hard
+wall-time shutdown bound can be promised against synchronous filesystem stalls.
 
-`CoreTelemetry.ready` completes asynchronous storage initialization. Live capture
-can start while storage is initializing; windows arriving before storage is
-ready are dropped and counted. Initialization failure stops capture. A configured
-path is not a successful-open, sample or write assertion.
+Pending windows belong to their originating session/branch. Normal commits
+materialize them before the committing ordinary row and preserve parent/leaf/replay order.
+Setup-only rows in a new persistent session leave the <=2 windows pending until
+an actual conversation commit. That commit may reserialize only their envelopes
+to the then-current same-origin/same-branch parent; no hot callback does this.
+No conversation means no new file; final metadata cannot recreate a deleted
+conversation file. Crash/dead-terminal paths detach without sampling or disk IO.
+Public TUI stop detaches only that renderer; the still-owned SDK session remains
+live until session disposal or CLI finalization. Nonpersistent sessions keep metadata in
+memory only. Retention is ordinary append-only history, not diagnostic slots or
+a ten-minute capture. SDK and CLI sessions own independent recorders; TUI
+observations attach only to the owning TUI. Disposal/new/resume/fork/tree changes
+settle/reset attribution without carrying aggregates into the next session.
+Forks retain inherited historical rows/entry IDs like other history. Existing
+parentSession lineage is sufficient here: copied rows are inherited observations,
+not newly generated measurements. Current runtime health counts only the current
+recorder's observations/commits, not ancestor totals or copy writes. This does
+not supply a new explicit per-row origin identity.
 
-## Actual TUI observations
+## Structured payload
 
-`subscribeTuiResponsiveness(callback)` is exported from pi-tui. It supplies only
-a closed category and numeric duration, never a source string. Up to four
-independent owners may subscribe; unsubscribe is idempotent and affects only its
-owner. Exceptions and promise rejections are swallowed. Synchronous subscriber
-work still costs main-thread time and must stay bounded.
+Rows use ordinary `type="custom"`, `customType="pi.core-responsiveness"`, and the
+normal id/parentId/timestamp envelope. `data` uses `schema="pi.core-responsiveness"`,
+`schemaVersion=2`, `window`, monotonic-clock elapsed `windowMs`, fixed `metrics` and cumulative
+`losses` (`droppedRecords`, `writeErrors`). The nine metrics each have
+`count,totalMs,maxMs`:
 
-| Category | Meaning |
-| --- | --- |
-| `input_dispatch` | Actual terminal callback synchronous dispatch duration, including consumed input |
-| `input_dispatch_error` | Dispatch invocation threw; source exception remains unchanged |
-| `render_request` | Redraw request, including input-preempted and forced requests |
-| `render_coalesced` | Another request with a pending scheduling timestamp |
-| `render_cancelled` | Pending observed request cancelled by TUI stop |
-| `render_wait` | First pending request to actual render entry; not physical keypress latency |
-| `render` | Actual renderer invocation duration, including layout/diff/write calls |
-| `render_error` | Renderer invocation threw; source exception remains unchanged |
-| `full_redraw` | Renderer full-redraw counter increased during the invocation |
+`input_dispatch`, `input_dispatch_error`, `render_request`, `render_coalesced`,
+`render_cancelled`, `render_wait`, `render`, `render_error`, `full_redraw`.
 
-Count-only categories have zero duration. Render count includes invocations that
-throw and no-change invocations; it is not a count of terminal-displayed frames
-or writes. Pre-start rendering is not measured. Direct frames without a pending
-request have no wait observation. Subscription generation changes invalidate
-old pending wait attribution. Both regular and fullscreen renderers use these
-same base-class seams.
+`eventLoop` has `scope="process"`, `samples,minMs,maxMs,meanMs,p99Ms`. Concurrent
+sessions observe overlapping process-wide delay; these are not session CPU
+measurements. Unsampled/invalid delay values are null, distinct from zero.
+Payload contains no prompt/output/keys/URLs/auth/arbitrary errors/stacks/paths
+or extra identities/timestamps. The normal envelope supplies session linkage.
 
-Nested inclusive timings overlap: input dispatch can request rendering, and
-rendering can request another frame. Do not add these aggregates as CPU time.
-No causal input-to-frame IDs or phase-level profiler are provided.
+The existing actual TUI seams measure synchronous dispatch (including consumed
+input), scheduling wait/coalescing/cancellation, renderer invocations (including
+no-change/failed invocations), and redraw observations in both modes. Source
+exceptions are unchanged; observer failures are isolated. Inclusive timings
+can overlap and must not be summed as CPU. No physical-keypress/display-completion
+latency, causal input-to-frame IDs or production improvement is established.
 
-## Window record
+## Bounds and health
 
-Files contain one JSON object with this fixed schema:
+Nine categories; 20-ms histogram resolution; 5-second unref cadence; at most one
+idle event-loop record per minute; <=8,192-byte enveloped rows and two pending
+pre-serialized rows per manager. Further useful windows drop/count until an
+ordinary commit; no ordinary row is discarded. No total lifetime capture cap.
+Counts cap at one billion, individual durations at 600,000 ms, totals at the
+safe integer ceiling. History grows only at these bounded useful checkpoints
+under normal retention, not per key/render. Metadata never emits redraw events.
 
-```json
-{
-  "schema": "pi.core-responsiveness",
-  "schemaVersion": 1,
-  "window": 1,
-  "windowMs": 5000,
-  "metrics": {
-    "input_dispatch": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "input_dispatch_error": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render_request": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render_coalesced": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render_cancelled": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render_wait": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "render_error": { "count": 0, "totalMs": 0, "maxMs": 0 },
-    "full_redraw": { "count": 0, "totalMs": 0, "maxMs": 0 }
-  },
-  "eventLoop": { "samples": 0, "minMs": null, "maxMs": null, "meanMs": null, "p99Ms": null },
-  "losses": { "droppedRecords": 0, "writeErrors": 0 }
-}
-```
+/runtime distinguishes default configured state, live actual-session ownership,
+memory-only/disabled/no-active-session states and observed health (including
+buffered vs persisted rows and dropped/error counters). Configuration is not
+sample or persistence evidence. Snapshot reporting performs no diagnostic IO.
 
-`window` is a per-capture sequence, not an identity. `windowMs` uses a monotonic
-clock; no wall timestamp, process/session/request ID or directory is serialized.
-Every TUI category is included; zero means no observed invocations in this
-window. Delay statistics are null when histogram samples are unavailable, or
-when a numeric value is invalid. Histogram nanoseconds become milliseconds;
-values are bounded and rounded to three decimal places. Counts cap at one
-billion, individual durations at ten minutes, aggregate totals at the safe
-integer ceiling. Unknown kinds and negative/nonfinite event durations are ignored.
-
-The histogram is reset each window. Loss counters in records are cumulative
-snapshots at serialization, so the current write's later failure cannot appear
-in that same record. Live health provides the later counters. Limits stop
-observation after 120 windows or the first sample at/after the ten-minute deadline;
-a blocked event loop can delay timer delivery.
-
-## Storage and bounded shutdown
-
-Only the final directory may be created; ancestors must exist. POSIX UID checks
-reject foreign ownership, symlinks and unsafe writable ancestors, allowing sticky
-shared temporary ancestors. The final directory must be owned and exclude group/
-other permission bits (created 0700). Windows/no-UID environments fail closed.
-
-An exclusively created 0600 `core-telemetry.lock` owns the directory. Existing
-locks are never removed speculatively. Fixed output slots are checked for regular
-owned private single-link files. Writes use an exclusive no-follow 0600
-`core-telemetry.tmp`, verify file and directory identity, close, then rename to
-`core-telemetry-0.json` or `core-telemetry-1.json`. No unrelated files are scanned
-or pruned. The two slots retain only the latest committed windows, **not the full
-capture history**; repeat captures overwrite slots. Use distinct directories for
-independent processes. There is no wall-clock correlation across captures.
-
-One active write plus one pending serialized record is the maximum queue.
-Further windows drop without awaiting storage. Record bytes cap at 8 KiB and
-cumulative accepted bytes at 1 MiB. Storage failure stops capture and exposes
-only a static reason/counter, never an error message or path.
-
-Close takes a final window if still live, detaches timer/histogram/subscription
-synchronously, and drains for at most 100 ms. On timeout it counts queued output
-as dropped and abandons pending commits. Already-issued filesystem calls cannot
-be cancelled; owned handle/temp/lock cleanup waits for eventual completion.
-Retaining that lock prevents a new owner racing a blocked old writer. Crashes can
-leave stale lock/temp files requiring operator inspection; no automatic stale
-recovery is attempted. Ownership/mode/inode checks do not protect against a
-malicious same-UID or privileged peer, and writes are not fsync-durable.
-
-## `/runtime`: configuration versus evidence
-
-The existing runtime snapshot adds `responsiveness`:
-
-- `capabilityVersion: 1` and fixed coverage `event_loop_windows_and_tui_callbacks`;
-- `configured`, `live`, and static `reason` (`disabled`, `invalid_directory`,
-  `not_started`, `starting`, `active`, `storage_error`, `observer_error`, `limit`,
-  `closed`, `shutdown_timeout`);
-- nullable `health`: written records/bytes, dropped records, write errors, queued
-  records, observed windows, input dispatches and actual render invocations.
-
-Before a recorder exists, health is null and text says `unavailable`, not zero.
-For an existing recorder, zero is an observed counter value; it does not prove
-healthy storage or input/frame activity. `live=true reason=starting` means
-observation is active but storage initialization is incomplete. After stop has
-completed, the process owner is released and status is configuration-only again.
-Reporting performs no telemetry IO, environment dump, Git scan or inspector
-activation. Existing transport/inspector semantics remain unchanged.
-
-## Evidence and limits
-
-See [QA](qa.md) for targeted tests and required parent gates. These fixtures
-establish instrumentation/lifecycle behavior, not production latency or reduced
-CPU. No paid provider request, production capture, attach, signal, deployment,
-commit or push was performed.
+See [QA](qa.md) and [tasks](tasks.md) for fresh verification. Old standalone-capture
+gates establish only the previous design and cannot accept this revision.

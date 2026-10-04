@@ -77,7 +77,6 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
-import { stopCoreTelemetry } from "../../core/core-telemetry.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -623,6 +622,7 @@ export class InteractiveMode {
 			fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 			fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
 		});
+		this.session.coreTelemetry?.attachTui(this.renderer);
 		this.ui = createInteractiveTuiReference(() => this.renderer);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
@@ -917,6 +917,7 @@ export class InteractiveMode {
 			nextUi.restoreRenderState(this.mainScreenRenderState);
 		}
 		this.renderer = nextUi;
+		this.session.coreTelemetry?.attachTui(nextUi);
 		this.options.tuiMode = mode;
 		this.mountInteractiveTui(nextUi, components);
 		nextUi.invalidate();
@@ -2073,6 +2074,7 @@ export class InteractiveMode {
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		const session = this.session;
+		session.coreTelemetry?.attachTui(this.renderer);
 
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
@@ -2110,6 +2112,7 @@ export class InteractiveMode {
 			this.chatContainer.addChild(new ThemedText(() => theme.fg("muted", instructions), this.outputPad, 0));
 		}
 		stopThemeWatcher();
+		this.session.coreTelemetry?.close(false);
 		this.stop("transcript");
 		process.exit(1);
 	}
@@ -3251,7 +3254,11 @@ export class InteractiveMode {
 			}
 			if (text === "/runtime") {
 				const info = formatRuntimeInfo(
-					getRuntimeInfo(this.session.modelRuntime, this.session.resourceLoader.getExtensions().extensions),
+					getRuntimeInfo(
+						this.session.modelRuntime,
+						this.session.resourceLoader.getExtensions().extensions,
+						this.session.coreTelemetry,
+					),
 				);
 				this.chatContainer.addChild(new Spacer(1));
 				this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", info), 1, 0));
@@ -3857,6 +3864,7 @@ export class InteractiveMode {
 	}
 
 	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
+		if (entry.customType === "pi.core-responsiveness") return;
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
 			return;
@@ -4327,7 +4335,6 @@ export class InteractiveMode {
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
-			await stopCoreTelemetry();
 			process.exit(0);
 		}
 
@@ -4347,13 +4354,12 @@ export class InteractiveMode {
 			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
 		}
 
-		await stopCoreTelemetry();
 		process.exit(0);
 	}
 
 	private emergencyTerminalExit(): never {
 		this.isShuttingDown = true;
-		void stopCoreTelemetry();
+		this.session.coreTelemetry?.close(false);
 		this.unregisterSignalHandlers();
 		killTrackedDetachedChildren();
 		// The terminal is gone. Do not run normal shutdown because TUI and
@@ -4373,7 +4379,7 @@ export class InteractiveMode {
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
 	private uncaughtCrash(error: Error): never {
-		void stopCoreTelemetry();
+		this.session.coreTelemetry?.close(false);
 		if (this.isShuttingDown) {
 			process.exit(1);
 		}
@@ -7164,6 +7170,6 @@ export class InteractiveMode {
 			this.isInitialized = false;
 		}
 		this.unregisterSignalHandlers();
-		void stopCoreTelemetry();
+		this.session.coreTelemetry?.attachTui();
 	}
 }

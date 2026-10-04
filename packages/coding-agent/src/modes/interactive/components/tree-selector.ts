@@ -338,7 +338,8 @@ class TreeList implements Component {
 
 		this.filteredNodes = this.flatNodes.filter((flatNode) => {
 			const entry = flatNode.node.entry;
-			if (entry.type === "usage") return false;
+			if (entry.type === "usage" || (entry.type === "custom" && entry.customType === "pi.core-responsiveness"))
+				return false;
 			const isCurrentLeaf = entry.id === this.currentLeafId;
 
 			// Skip assistant messages with only tool calls (no text) unless error/aborted

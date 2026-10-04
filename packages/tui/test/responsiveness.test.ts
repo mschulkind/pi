@@ -37,6 +37,60 @@ class TestTerminal implements Terminal {
 }
 
 for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
+	test(`${Renderer.name}: another TUI's subscription changes cannot erase this owner's pending wait`, (t) => {
+		let now = 100;
+		t.mock.method(performance, "now", () => now);
+		const first = new Renderer(new TestTerminal());
+		const second = new Renderer(new TestTerminal());
+		const waits: number[] = [];
+		const offFirst = subscribeTuiResponsiveness((kind, duration) => {
+			if (kind === "render_wait") waits.push(duration);
+		}, first);
+		let offSecond = () => {};
+		try {
+			first.start();
+			offSecond = subscribeTuiResponsiveness(() => {}, second);
+			offSecond();
+			now += 5;
+			first.renderNow();
+			assert.deepEqual(waits, [5]);
+		} finally {
+			first.stop({ preserveScreen: true });
+			second.stop({ preserveScreen: true });
+			offFirst();
+			offSecond();
+		}
+	});
+	test(`${Renderer.name}: scoped owners isolate concurrent TUIs and detach independently`, () => {
+		const terminals = [new TestTerminal(), new TestTerminal()];
+		const first = new Renderer(terminals[0]!);
+		const second = new Renderer(terminals[1]!);
+		let firstInputs = 0;
+		let secondInputs = 0;
+		const offFirst = subscribeTuiResponsiveness((kind) => {
+			if (kind === "input_dispatch") firstInputs++;
+		}, first);
+		const offSecond = subscribeTuiResponsiveness((kind) => {
+			if (kind === "input_dispatch") secondInputs++;
+		}, second);
+		try {
+			first.start();
+			second.start();
+			first.addInputListener(() => ({ consume: true }));
+			second.addInputListener(() => ({ consume: true }));
+			terminals[0]!.input!("private");
+			assert.deepEqual([firstInputs, secondInputs], [1, 0]);
+			offFirst();
+			terminals[0]!.input!("private");
+			terminals[1]!.input!("private");
+			assert.deepEqual([firstInputs, secondInputs], [1, 1]);
+		} finally {
+			first.stop({ preserveScreen: true });
+			second.stop({ preserveScreen: true });
+			offFirst();
+			offSecond();
+		}
+	});
 	test(`${Renderer.name}: observes real dispatch, coalescing, scheduled and direct frames without content`, async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout"] });
 		let now = 100;

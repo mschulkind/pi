@@ -7,5 +7,5 @@ test("core telemetry changelog links to the fork contract without escaping the i
 	const link = changelog.match(/\[Core responsiveness\]\(([^)]+)\)/)?.[1];
 	expect(link).toBe("https://github.com/mschulkind/pi/blob/main/docs/core-responsiveness/implementation.md");
 	const document = new URL("../../../docs/core-responsiveness/implementation.md", import.meta.url);
-	expect(await readFile(document, "utf8")).toContain('"schema": "pi.core-responsiveness"');
+	expect(await readFile(document, "utf8")).toContain('schema="pi.core-responsiveness"');
 });

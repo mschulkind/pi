@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added bounded scalar-only responsiveness subscriptions at actual input dispatch, redraw scheduling and renderer boundaries for both TUI modes. Disabled paths add no telemetry clocks, timers or per-event allocations; observer failures do not replace source exceptions.
+- Added bounded scalar-only responsiveness subscriptions at actual input dispatch, redraw scheduling and renderer boundaries for both TUI modes, with optional actual-TUI scope to isolate concurrent owners. Disabled paths add no telemetry clocks, timers or per-event allocations; observer failures do not replace source exceptions.
 
 ## [1.0.0] - 2026-10-01
 

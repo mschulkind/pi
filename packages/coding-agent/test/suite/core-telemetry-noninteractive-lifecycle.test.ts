@@ -1,15 +1,16 @@
-import { existsSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as perf from "node:perf_hooks";
 import { PassThrough } from "node:stream";
 import { expect, test, vi } from "vitest";
 import { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
-import { startCoreTelemetry, stopCoreTelemetry } from "../../src/core/core-telemetry.ts";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { runPrintMode } from "../../src/modes/print-mode.ts";
 import { runRpcMode } from "../../src/modes/rpc/rpc-mode.ts";
 import { createHarness } from "./harness.ts";
 
+vi.mock("node:perf_hooks", { spy: true });
 const output = vi.hoisted(() => ({ order: [] as string[] }));
 vi.mock("../../src/core/output-guard.ts", () => ({
 	flushRawStdout: async () => {
@@ -28,21 +29,36 @@ function deferred() {
 	return { promise, resolve };
 }
 
-// Review P1: main's finally cannot drain captures when a mode calls process.exit().
+// Hard exits must finalize the actual session owner; main's finally cannot intercept process.exit().
 test.each([
 	["rpc", "eof", 0],
 	["rpc", "extension", 0],
 	["rpc", "SIGTERM", 143],
 	["rpc", "SIGHUP", 129],
+	["print", "normal", 0],
 	["print", "SIGTERM", 143],
 	["print", "SIGHUP", 129],
-] as const)("%s %s drains telemetry before exit %s and permits a fresh capture", async (mode, trigger, code) => {
+] as const)("%s %s finalizes session history before exit %s", async (mode, trigger, code) => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-core-noninteractive-"));
-	await chmod(directory, 0o700);
-	vi.stubEnv("PI_CORE_TELEMETRY", "1");
-	vi.stubEnv("PI_CORE_TELEMETRY_DIR", directory);
+	vi.stubEnv("PI_CORE_TELEMETRY", undefined);
+	const histogram = {
+		count: 1,
+		min: 20e6,
+		max: 20e6,
+		mean: 20e6,
+		percentile: () => 20e6,
+		enable() {},
+		disable() {},
+		reset() {
+			this.count = 0;
+		},
+	};
+	vi.spyOn(perf, "monitorEventLoopDelay").mockReturnValue(
+		histogram as unknown as ReturnType<typeof perf.monitorEventLoopDelay>,
+	);
 	output.order = [];
 	const harness = await createHarness({
+		sessionManager: SessionManager.create(directory, directory),
 		extensionFactories: [
 			(pi) => {
 				pi.registerCommand("fixture-quit", {
@@ -68,6 +84,7 @@ test.each([
 			throw new Error("Unused runtime replacement");
 		},
 	);
+	harness.session.sessionManager.appendMessage({ role: "user", content: "ordinary fixture", timestamp: 1 });
 	const dispose = runtime.dispose.bind(runtime);
 	vi.spyOn(runtime, "dispose").mockImplementation(async () => {
 		await dispose();
@@ -87,22 +104,20 @@ test.each([
 	const exited = deferred();
 	const releasePrint = deferred();
 	const printReady = deferred();
-	const recorder = startCoreTelemetry()!;
-	let atExit: { live: boolean; queuedRecords: number; recordsWritten: number; lockExists: boolean } | undefined;
+	const recorder = harness.session.coreTelemetry!;
+	let atExit: { live: boolean; bufferedRecords: number; recordsPersisted: number } | undefined;
 	const exit = vi.spyOn(process, "exit").mockImplementation(() => {
 		const status = recorder.status();
 		atExit = {
 			live: status.live,
-			queuedRecords: status.health!.queuedRecords,
-			recordsWritten: status.health!.recordsWritten,
-			lockExists: existsSync(join(directory, "core-telemetry.lock")),
+			bufferedRecords: status.health!.bufferedRecords,
+			recordsPersisted: status.health!.recordsPersisted,
 		};
 		exited.resolve();
 		return undefined as never;
 	});
 	let printing: Promise<number> | undefined;
 	try {
-		await recorder.ready;
 		expect(recorder.status().reason).toBe("active");
 		if (mode === "rpc") {
 			void runRpcMode(runtime);
@@ -120,28 +135,44 @@ test.each([
 			});
 			printing = runPrintMode(runtime, { mode: "text" });
 			await printReady.promise;
-			signals.get(trigger as NodeJS.Signals)!();
+			if (trigger === "normal") {
+				releasePrint.resolve();
+				expect(await printing).toBe(0);
+				const status = recorder.status();
+				atExit = {
+					live: status.live,
+					bufferedRecords: status.health!.bufferedRecords,
+					recordsPersisted: status.health!.recordsPersisted,
+				};
+				exited.resolve();
+			} else signals.get(trigger as NodeJS.Signals)!();
 		}
 		await exited.promise;
-		expect(exit).toHaveBeenCalledWith(code);
-		expect(atExit).toEqual({ live: false, queuedRecords: 0, recordsWritten: 1, lockExists: false });
-		expect(output.order).toEqual(mode === "rpc" && trigger !== "SIGTERM" ? ["dispose", "flush"] : ["dispose"]);
+		if (trigger === "normal") expect(exit).not.toHaveBeenCalled();
+		else expect(exit).toHaveBeenCalledWith(code);
+		expect(atExit).toEqual({ live: false, bufferedRecords: 0, recordsPersisted: 1 });
+		expect(output.order).toEqual(
+			(mode === "rpc" && trigger !== "SIGTERM") || trigger === "normal" ? ["dispose", "flush"] : ["dispose"],
+		);
 		const files = await readdir(directory);
-		expect(files).toEqual(["core-telemetry-0.json"]);
-		const record = JSON.parse(await readFile(join(directory, files[0]!), "utf8"));
-		expect(record).toMatchObject({ schema: "pi.core-responsiveness", schemaVersion: 1, window: 1 });
+		expect(files).toEqual([harness.session.sessionFile!.split("/").at(-1)]);
+		const entries = (await readFile(harness.session.sessionFile!, "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(entries.at(-1)).toMatchObject({
+			type: "custom",
+			customType: "pi.core-responsiveness",
+			data: { schema: "pi.core-responsiveness", schemaVersion: 2, window: 1 },
+		});
 		expect(harness.getPendingResponseCount()).toBe(0);
 		expect(harness.eventsOfType("agent_start")).toHaveLength(0);
-		const again = startCoreTelemetry()!;
-		expect(again).not.toBe(recorder);
-		await again.ready;
-		expect(again.status().reason).toBe("active");
-		await stopCoreTelemetry();
+		expect(SessionManager.open(harness.session.sessionFile!).buildSessionContext().messages).toHaveLength(1);
 	} finally {
 		releasePrint.resolve();
 		await printing;
 		input.destroy();
-		await stopCoreTelemetry();
+		recorder?.close();
 		vi.restoreAllMocks();
 		vi.unstubAllEnvs();
 		harness.cleanup();

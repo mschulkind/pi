@@ -15,6 +15,7 @@ import { randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
+	constants,
 	createReadStream,
 	existsSync,
 	mkdirSync,
@@ -601,6 +602,11 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 	return sessionDir;
 }
 
+// A failed metadata-tail separator leaves an unknown inode unsafe for any manager,
+// including preloaded writers and hardlink aliases. Keep constant-memory recovery
+// enabled for the rest of this process; blank JSONL lines are ignored on replay.
+let separateJournalAppends = false;
+
 const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
 /** Bound synchronous header discovery while allowing large cwd and custom metadata fields. */
@@ -985,6 +991,12 @@ async function listSessionsFromDir(
  * handles compaction summaries and follows the path from root to current leaf.
  */
 export class SessionManager {
+	private coreTelemetryQueue: Array<{
+		entry: CustomEntry;
+		serialized: string;
+		complete: (result: "persisted" | "memory" | "dropped" | "error") => void;
+	}> = [];
+	private coreTelemetryGeneration = 0;
 	private sessionId: string = "";
 	private sessionFile: string | undefined;
 	private sessionDir: string;
@@ -1027,6 +1039,7 @@ export class SessionManager {
 	}
 
 	private _setSessionFile(sessionFile: string, preloadedFileEntries?: FileEntry[]): void {
+		this.discardCoreTelemetry();
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			const entries = preloadedFileEntries ?? loadEntriesFromFile(this.sessionFile);
@@ -1055,6 +1068,7 @@ export class SessionManager {
 	}
 
 	newSession(options?: NewSessionOptions): string | undefined {
+		this.discardCoreTelemetry();
 		if (options?.id !== undefined) {
 			assertValidSessionId(options.id);
 		}
@@ -1169,7 +1183,7 @@ export class SessionManager {
 		);
 	}
 
-	_persist(entry: SessionEntry): void {
+	_persist(entry: SessionEntry, prefix = ""): void {
 		if (!this.persist || !this.sessionFile) return;
 
 		if (!this.flushed) {
@@ -1184,15 +1198,137 @@ export class SessionManager {
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${separateJournalAppends ? "\n" : ""}${prefix}${JSON.stringify(entry)}\n`);
+		}
+	}
+
+	private generateEntryId(): string {
+		return generateId({
+			has: (id) => this.byId.has(id) || this.coreTelemetryQueue.some((row) => row.entry.id === id),
+		});
+	}
+
+	/** Buffer only bounded core metadata. No IO, history mutation, or public entry/render event. */
+	bufferCoreTelemetry(data: unknown, complete: (result: "persisted" | "memory" | "dropped" | "error") => void): void {
+		if (this.coreTelemetryQueue.length >= 2) {
+			complete("dropped");
+			return;
+		}
+		try {
+			const entry: CustomEntry = {
+				type: "custom",
+				customType: "pi.core-responsiveness",
+				data,
+				id: this.generateEntryId(),
+				parentId: this.coreTelemetryQueue.at(-1)?.entry.id ?? this.leafId,
+				timestamp: new Date().toISOString(),
+			};
+			const serialized = `${JSON.stringify(entry)}\n`;
+			if (Buffer.byteLength(serialized) > 8192) {
+				complete("dropped");
+				return;
+			}
+			this.coreTelemetryQueue.push({ entry, serialized, complete });
+		} catch {
+			complete("error");
+		}
+	}
+
+	getCoreTelemetryGeneration(): number {
+		return this.coreTelemetryGeneration;
+	}
+
+	private discardCoreTelemetry(): void {
+		this.coreTelemetryGeneration++;
+		for (const row of this.coreTelemetryQueue.splice(0)) row.complete("dropped");
+	}
+
+	private takeCoreTelemetry() {
+		const ready: typeof this.coreTelemetryQueue = [];
+		let parentId = this.leafId;
+		for (const row of this.coreTelemetryQueue.splice(0)) {
+			try {
+				row.entry.parentId = parentId;
+				row.serialized = `${JSON.stringify(row.entry)}\n`;
+				if (Buffer.byteLength(row.serialized) > 8192) {
+					row.complete("dropped");
+					continue;
+				}
+				ready.push(row);
+				parentId = row.entry.id;
+			} catch {
+				row.complete("error");
+			}
+		}
+		return ready;
+	}
+
+	/** Graceful final checkpoint only. Does not create a file for a telemetry-only session.
+	 * Existing history IO is synchronous; this cannot promise a wall-time filesystem bound. */
+	flushCoreTelemetry(): void {
+		const pending = this.takeCoreTelemetry();
+		if (pending.length === 0) return;
+		const sessionFile = this.sessionFile;
+		const canPersist = this.persist && this.flushed && sessionFile !== undefined && this._hasConversation();
+		try {
+			if (canPersist) {
+				// Append to an existing file only; telemetry must not recreate a deleted conversation.
+				const fd = openSync(sessionFile, constants.O_WRONLY | constants.O_APPEND);
+				try {
+					writeFileSync(
+						fd,
+						`${separateJournalAppends ? "\n" : ""}${pending.map((row) => row.serialized).join("")}`,
+					);
+				} catch (error) {
+					// Isolate a possibly partial row on the same owned fd, without
+					// truncation or recreating a deleted/replaced path. If IO still
+					// fails, every later append gets a separator in its existing write.
+					try {
+						writeFileSync(fd, "\n");
+					} catch {
+						separateJournalAppends = true;
+					}
+					throw error;
+				} finally {
+					closeSync(fd);
+				}
+			}
+			for (const row of pending) {
+				this.fileEntries.push(row.entry);
+				this.byId.set(row.entry.id, row.entry);
+				this.leafId = row.entry.id;
+				row.complete(canPersist ? "persisted" : "memory");
+			}
+		} catch {
+			for (const row of pending) row.complete("error");
 		}
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		// Setup-only entries do not commit a new persistent file. Keep windows bounded
+		// and pending until an actual commit; never claim those rows were persisted.
+		const willCommit =
+			!this.persist ||
+			this.flushed ||
+			this._hasConversation() ||
+			(entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"));
+		const pending = willCommit ? this.takeCoreTelemetry() : [];
+		for (const row of pending) {
+			this.fileEntries.push(row.entry);
+			this.byId.set(row.entry.id, row.entry);
+			this.leafId = row.entry.id;
+		}
+		if (pending.length) entry.parentId = this.leafId;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		try {
+			this._persist(entry, pending.map((row) => row.serialized).join(""));
+			for (const row of pending) row.complete(this.persist && this.flushed ? "persisted" : "memory");
+		} catch (error) {
+			for (const row of pending) row.complete("error");
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1204,7 +1340,7 @@ export class SessionManager {
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
 		const entry: SessionMessageEntry = {
 			type: "message",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			message,
@@ -1217,7 +1353,7 @@ export class SessionManager {
 	appendThinkingLevelChange(thinkingLevel: string): string {
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			thinkingLevel,
@@ -1230,7 +1366,7 @@ export class SessionManager {
 	appendModelChange(provider: string, modelId: string): string {
 		const entry: ModelChangeEntry = {
 			type: "model_change",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			provider,
@@ -1244,7 +1380,7 @@ export class SessionManager {
 	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
 		const entry: UsageEntry = {
 			type: "usage",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			kind,
@@ -1268,7 +1404,7 @@ export class SessionManager {
 	): string {
 		const timestamp = new Date().toISOString();
 		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
-		const id = generateId(this.byId);
+		const id = this.generateEntryId();
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			id,
@@ -1292,7 +1428,7 @@ export class SessionManager {
 			type: "custom",
 			customType,
 			data,
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
@@ -1305,7 +1441,7 @@ export class SessionManager {
 		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
 		const entry: SessionInfoEntry = {
 			type: "session_info",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			name: sanitizedName,
@@ -1348,7 +1484,7 @@ export class SessionManager {
 			content,
 			display,
 			details,
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
@@ -1387,7 +1523,7 @@ export class SessionManager {
 				: replacement;
 		const entry: ContextEditEntry = {
 			type: "context_edit",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			targetId,
@@ -1444,7 +1580,7 @@ export class SessionManager {
 		}
 		const entry: LabelEntry = {
 			type: "label",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			targetId,
@@ -1580,6 +1716,7 @@ export class SessionManager {
 		if (!this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
+		this.discardCoreTelemetry();
 		this.leafId = branchFromId;
 	}
 
@@ -1589,6 +1726,7 @@ export class SessionManager {
 	 * Use this when navigating to re-edit the first user message.
 	 */
 	resetLeaf(): void {
+		this.discardCoreTelemetry();
 		this.leafId = null;
 	}
 
@@ -1607,11 +1745,12 @@ export class SessionManager {
 		if (branchFromId !== null && !this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
+		this.discardCoreTelemetry();
 		const fromId = this.leafId ?? "root";
 		this.leafId = branchFromId;
 		const entry: BranchSummaryEntry = {
 			type: "branch_summary",
-			id: generateId(this.byId),
+			id: this.generateEntryId(),
 			parentId: branchFromId,
 			timestamp: new Date().toISOString(),
 			fromId,
@@ -1630,6 +1769,7 @@ export class SessionManager {
 	 * Returns the new session file path, or undefined if not persisting.
 	 */
 	createBranchedSession(leafId: string): string | undefined {
+		this.discardCoreTelemetry();
 		const previousSessionFile = this.sessionFile;
 		const path = this.getBranch(leafId);
 		if (path.length === 0) {

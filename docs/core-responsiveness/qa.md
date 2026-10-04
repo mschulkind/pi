@@ -1,139 +1,207 @@
 ---
-status: in-review
+status: accepted
 ---
 
-# Core responsiveness verification
+# Session responsiveness QA
 
-## Test-led evidence
+## Approved revision and evidence boundary
 
-Before the new modules existed, the TUI test failed on missing
-`responsiveness.ts`; the coding-agent test failed on missing `core-telemetry.ts`.
-These were observed module-not-found failures, not simulated red assertions.
+The user approved default-on host+jail metadata in ordinary session history;
+only `PI_CORE_TELEMETRY=0` opts out. Prior standalone-capture gates do not accept
+this revision. Baseline is unchanged `main` at `9adadcb8d7dcba074a2f249cdf683654e0d0743d`.
 
-Additional regressions were red before repair:
+Parent approved <=2 pending pre-serialized windows, piggyback on existing
+synchronous normal commits, and <=2-row graceful final append only to an already
+created conversation file. Setup-only persistent rows keep windows pending until
+an actual commit; <=2 envelope reserializations may rebind to the current parent
+within the same origin/branch. Ordinary durability/errors remain unchanged.
+No timer/input/render disk flush, async journal rewrite, immediate idle durability
+or hard wall-time shutdown guarantee against filesystem stalls is claimed.
 
-- Awaiting current IO via `settled` while capture remained live released the
-  ownership lock. The cadence test observed only `core-telemetry-0.json`, not
-  the required lock. Cleanup now runs only once capture is no longer live.
-- The exported category array was compile-time readonly but mutable at runtime.
-  The TUI test failed `Object.isFrozen`; categories are now runtime-frozen.
-  That red attempt also had a cascading scheduler assertion from the failed
-  test's unfinished TUI; the final complete rerun passed.
+Forks preserve inherited historical metadata/IDs and normal parentSession lineage.
+Copied observations are not newly generated fork measurements; current health
+counts only the current producer's observations/commits, not ancestor/copy totals.
+No stronger explicit per-row origin identity or analytics behavior is claimed.
 
-An initial full check found an invalid lifecycle-test settings spelling
-(`showTerminalProgress` at the top level). It was corrected to
-`terminal.showTerminalProgress`; final full checks pass. No dependency or
-lockfile changes were used to bypass errors.
+## Permanent red-to-green evidence
 
-## Targeted gates
+- Initial six history-policy tests failed against the old producer: default
+  creation returned undefined. Added default buffering/real normal commit/reopen/
+  leaf, exact opt-out, ignored directory, empty/memory-only, queue/lifetime/idle,
+  origin changes and final-vs-ordinary error cases before the initial source fix.
+- SDK/mode ownership regressions failed before AgentSession integration. Real
+  interactive, RPC JSONL and print paths use faux providers/intercepted exits,
+  not paid traffic. SDK producers are independent; disposal/fork/new/resume/tree
+  reset owners; regular/fullscreen renderer replacement retains actual-TUI scope.
+- Both renderer scope regressions initially observed zero attributed inputs.
+  Both pending-wait regressions observed an empty wait list when another TUI's
+  subscription changed. Real scoped callbacks now isolate owners and preserve
+  independent scheduling waits; original exception/disabled behavior remains.
+- Tree all-mode regression first rendered `pi.core-responsiveness`; HTML tree
+  regression first retained the telemetry leaf. Both now hide it even in all/
+  search views, while retaining raw ancestry. Context, summary serialization,
+  transcript rendering and actual session-discovery content indexes exclude it.
+- Startup/setup->first conversation/reopen checks truthful persisted counters;
+  deleted/empty conversations are not created/recreated by final metadata.
+  Envelope byte limits, bounded drops and nonfatal metadata errors are covered.
 
-All commands use HOME/TMPDIR outside Git. Run from the source fork root unless
-otherwise specified:
+Obsolete standalone lock/slot/deadline tests were replaced, not retained as
+claims about the superseding policy. Fixtures establish functional behavior,
+not loaded production identity, process CPU attribution or a performance gain.
 
-```bash
-HOME=/tmp TMPDIR=/tmp node --test \
-  packages/tui/test/responsiveness.test.ts \
-  packages/tui/test/tui-render.test.ts \
-  packages/tui/test/tui-alt-screen.test.ts \
-  packages/tui/test/tui-cell-size-input.test.ts
+## Prior implementation validation (handoff)
 
-cd packages/coding-agent
-HOME=/tmp TMPDIR=/tmp node ../../node_modules/vitest/dist/cli.js --run \
-  test/core-telemetry.test.ts \
-  test/runtime-info.test.ts \
+- **98/98 coding-agent tests across 18 files passed**, including all new/edited
+  telemetry files plus SDK, tree, runtime, summary/HTML and signal/RPC regressions.
+  Existing API coverage-gap notices are expected for local faux/auxiliary calls;
+  they do not claim HTTP attempt coverage or paid traffic.
+- **106/106 TUI tests passed** across responsiveness, rendering, fullscreen and
+  cell-size handling. Both regular/fullscreen isolation/wait regressions passed.
+- **Full `npm run check` passed**: Biome, pinned/runtime dependencies, import and
+  entry graphs, shrinkwrap/install-lock, TypeScript and browser smoke.
+- Whitespace/no-staged and released-changelog hash checks passed. HEAD is unchanged.
+
+Earlier iteration failures included formatting/lint and two TypeScript fixes;
+legacy reflection shutdown fixtures exposed redundant post-dispose owner access,
+which was removed. A mocked-fs listing fixture hung; moved the content-index test
+to real temporary storage. HTML function extraction needed its real search
+helpers. No production history behavior was altered to accommodate these fixtures.
+
+### Reproducible commands
+
+From `packages/coding-agent`, all with `HOME=/tmp TMPDIR=/tmp`:
+
+```sh
+node ../../node_modules/vitest/dist/cli.js --run \
+  test/core-telemetry-documentation.test.ts \
+  test/core-telemetry-projection.test.ts test/session-core-telemetry.test.ts \
+  test/core-telemetry.test.ts test/runtime-info.test.ts \
   test/suite/core-telemetry-lifecycle.test.ts \
   test/suite/core-telemetry-noninteractive-lifecycle.test.ts \
-  test/core-telemetry-documentation.test.ts \
+  test/suite/core-telemetry-replacement.test.ts \
+  test/sdk-session-manager.test.ts test/tree-selector.test.ts \
+  test/suite/agent-session-runtime.test.ts test/compaction-serialization.test.ts \
+  test/export-html-skill-block.test.ts test/export-html-whitespace.test.ts \
+  test/export-html-xss.test.ts \
   test/suite/regressions/5080-signal-shutdown-extension-cleanup.test.ts \
   test/suite/regressions/5868-rpc-unknown-command-id.test.ts \
   test/suite/regressions/5724-sigterm-signal-exit.test.ts
-cd ../..
+```
 
-HOME=/tmp TMPDIR=/tmp npm run check
+From the fork root, all with `HOME=/tmp TMPDIR=/tmp`:
+
+```sh
+node --test packages/tui/test/responsiveness.test.ts \
+  packages/tui/test/tui-render.test.ts packages/tui/test/tui-alt-screen.test.ts \
+  packages/tui/test/tui-cell-size-input.test.ts
+npm run check
 git diff --check
 git diff --cached --quiet
 ```
 
-The fresh combined TUI run passed **102/102**, no failures/skips. The expanded
-coding-agent run passed **36/36 across eight files**: the retained 27 cases plus
-six noninteractive lifecycles, one changelog-link regression, and two existing
-RPC/signal regressions. The original 27/27 handoff result is retained evidence;
-these 36/36 and 102/102 results were freshly rerun during review resolution.
+## Final blocker corrections (2026-10-04)
 
-`npm run check` passed formatter, pinned/runtime dependency, relative-import,
-entry-graph, shrinkwrap/install-lock, TypeScript and browser-smoke checks. Biome
-formatted owned test files; unrelated source/dependencies remain unchanged.
-Released changelog bodies were compared against HEAD and remain byte-identical.
-Diff whitespace checks pass and there are no staged files.
+Owned follow-up files are exactly:
+- `packages/coding-agent/src/core/compaction/compaction.ts`
+- `packages/coding-agent/src/core/session-manager.ts`
+- `packages/coding-agent/test/core-telemetry-projection.test.ts`
+- `packages/coding-agent/test/session-core-telemetry-tail.test.ts` (new)
+- this QA file.
 
-## Review resolution
+### Compaction turn boundary
 
-- **P1:** Before repair, all six noninteractive fixtures observed `live=true`,
-  zero written records and an existing lock at the mocked process exit. RPC
-  shutdown and print signal handlers now await `stopCoreTelemetry()` before
-  exit. Passing tests assert a committed final window, empty queue, removed
-  lock at exit, preserved disposal/flush ordering and codes (0/143/129), and
-  successful subsequent capture in the same directory. RPC tests use the real
-  JSONL reader over a temporary stream, actual EOF and an extension shutdown
-  command; signal-shaped tests invoke captured handlers without OS signals.
-  Print binding is held after actual extension binding to exercise its real
-  registered signal handler. No generation or paid call is made.
-- **P2:** The changelog regression first observed the package-escaping relative
-  link. The replacement is a stable `mschulkind/pi` main-branch repository URL;
-  the test checks that spelling and the source contract's existence/schema.
-  Published URL availability is not claimed before human publication.
-- The first fresh full check formatted the new lifecycle test, then caught its
-  explicit temporary-stream/stdin type assertion. The assertion now crosses
-  `unknown`; no implementation or dependency was weakened to pass typechecking.
-  The final fresh `npm run check` passed all stages with no formatter fixes;
-  the post-format coding-agent rerun passed 36/36. Released changelog SHA-256
-  bodies still match HEAD; `git diff --check` and the no-staged-files check pass.
+Before fixing the source, the paired `prepareCompaction()` regression reproduced
+`isSplitTurn=true` with metadata versus `false` without it. The public
+`findCutPoint()` regression independently reproduced the same mismatch against
+its original classifier. Both classifiers now preserve the context-visible cut
+for turn classification while retaining adjacent raw metadata in history.
+Paired boundary/split tests verify summary inputs, split status, retained raw
+indices/IDs, and one versus two local faux summary calls. Existing context-edit
+recovery/omission regressions remain green. No real provider call is used.
 
-## What the tests establish
+### Failed metadata tail
 
-Real regular/fullscreen TUI callbacks use fake monotonic clocks to verify
-consumed input, source exceptions, isolated throwing/rejecting observers,
-coalesced requests, scheduled/direct/forced/input-preempted frames, cancellation,
-repeat start/stop and changed ownership. Disabled dispatch adds no clock; disabled
-scheduler/direct-render paths retain only their existing clock calls. Category
-cardinality is frozen and four subscription owners are enforced.
+Real-file regressions first reproduced loss of the next ordinary row after a
+partial final metadata append threw: reopened branch contained only the later
+orphaned message. Final append now attempts a one-byte newline on the same open
+fd before closing it; it does not truncate, recreate or repair through a replaced
+path. This isolates a malformed metadata fragment, not restores lost metadata.
+If that separator also fails, a supervisor-approved constant-memory process-wide
+flag prepends a newline in all subsequent existing append writes, including
+already-loaded managers and hardlink/renamed-file writers. The flag never resets
+on owner disposal/session replacement; no inode/path table or extra healthy IO
+is added. Healthy processes' commit bytes and IO are unchanged. Blank lines are
+ignored by existing replay. Ordinary write errors still propagate.
 
-Recorder tests use private temporary directories and controlled histograms/IO.
-They verify activation/opt-out, no disabled clock/interval/IO/subscription,
-null-versus-zero, numeric sanitization, two-file retention, modes, cadence,
-window/time/byte bounds, actual blocked file writes, two-record queue, dropped
-records, 100-ms close, eventual cleanup, delayed initialization, unsafe directory/
-symlink/hardlink rejection, concurrent owners, lock-inode replacement, repeat
-health reset, observer failure and metadata-only storage errors.
+Six real-file cases cover successful/failed separator repair, preloaded writers,
+hardlink aliases, path replacement during the failing append, repeated ordinary
+appends/reopen, parent/leaf order, unrelated files and ordinary-error propagation.
+Tests use normal Vitest file isolation, not a production reset seam.
+This does not claim crash durability, immediate idle persistence or recovery of
+lost metadata. Existing replay-time tail handling remains unchanged.
 
-The lifecycle harness uses actual `InteractiveMode`, `AgentSessionRuntime`, TUI
-and faux generation. It records input/frame observations, shows live `/runtime`
-health, verifies unchanged faux assistant output and exhausted response fixtures,
-then tests public stop and fresh capture. Both graceful quit and signal-shaped
-shutdown paths drain before the mocked existing process exit. No OS signal was
-sent and no paid/provider-network request was made.
+### Actual follow-up validation
 
-## Limitations and parent acceptance
+- Initial red run after fixture correction: **4 failed / 6 passed** (projected
+  compaction boundary and ordinary-row loss on preloaded/hardlink writers).
+  Separate public-classifier red run: **1 failed / 1 passed / 6 skipped**.
+- Final targeted run: **131 passed / 2 skipped across 13 files**. Skips are existing
+  compaction fixture cases, not the added regressions. Expected API coverage-gap
+  notices came from local faux/auxiliary fixtures, not paid requests.
+- Full `npm run check` passed; formatting passes changed only owned source/tests.
+  Final clean check, whitespace and no-staged-file checks passed (output report).
+  Earlier fixture iterations fixed histogram reset/mock-call isolation; none
+  changed source behavior to accommodate tests.
 
-Initial independent review blocked on P1/P2; both are implemented with
-observed-red permanent regressions. The retained independent reviewer re-read
-the complete final diff and new files and found no remaining issues. Review
-`c871a76f-3e74-4d1b-bd70-c9593d3d6e67` verified shutdown ordering, exit codes,
-lock removal at exit and the package-safe documentation link. It did not rerun
-tests. Parent-managed gate `b4ec392f` passed offline build, complete quality checks,
-full isolated non-end-to-end suites, loaded build-identity regression, packed
-SDK plus bundled/unbundled CLI consumers, and documentation validation.
-Coding-agent reported 2,849 passed and 50 skipped. Test HOME/TMPDIR were outside
-Git, provider credentials isolated, and permission fixtures ran without DAC
-override capabilities. Logs are retained in the parent workspace under
-`.yolo/durable/core-telemetry-parent/`. Publication and installation remain
-human steps. Production loaded identity, CPU, latency and PID 79 remain unverified.
+From `packages/coding-agent`, with `HOME=/tmp TMPDIR=/tmp`:
 
-Capture is POSIX/private-directory-only and keeps two latest windows, not a full
-history or per-request timeline. Callback durations are inclusive synchronous
-measurements, not physical keypress or terminal-pixel latency. Already-issued
-filesystem IO can outlive the shutdown wait; stale files after crashes fail
-closed. Same-UID/privileged adversaries and crash-durable fsync are not covered.
-No observer configuration or telemetry failure changes model/context/input/
-renderer decisions. No profiling, inspector activation, scanner/workflow/Yolo
-edit, staging, commit, push, restart, deployment or upload was performed.
+```sh
+node ../../node_modules/vitest/dist/cli.js --run \
+  test/core-telemetry-projection.test.ts test/session-core-telemetry-tail.test.ts \
+  test/session-core-telemetry.test.ts test/compaction.test.ts \
+  test/compaction-summary-reasoning.test.ts test/session-context-edit.test.ts \
+  test/session-manager/build-context.test.ts test/suite/agent-session-runtime.test.ts \
+  test/core-telemetry-documentation.test.ts test/core-telemetry.test.ts \
+  test/suite/core-telemetry-lifecycle.test.ts \
+  test/suite/core-telemetry-noninteractive-lifecycle.test.ts \
+  test/suite/core-telemetry-replacement.test.ts
+```
+
+The approved activation/persistence boundary is unchanged: default on in host
+and jail, exact `PI_CORE_TELEMETRY=0` off; bounded schema-v2 plain `custom` rows
+with `customType="pi.core-responsiveness"` live in ordinary session JSONL, not
+capture files. They are excluded from model/summary context and terminal/HTML
+presentation/search. Actual AgentSession ownership and renderer attachment stay
+intact. Pending old-origin windows are discarded/counted on branch/identity
+changes; forks inherit history rather than generating new observations from it.
+At most two <=8,192-byte rows buffer; idle sampling performs no disk IO; normal
+synchronous commits/final checkpoint provide delayed durability. Crash paths
+avoid final sampling/IO; graceful finalization cannot bound filesystem stall time.
+Overlapping event-loop windows are process-wide, not per-session CPU or evidence
+of a performance gain. API producer/TUI seams, dependencies and root docs were
+not changed by this follow-up.
+
+## Parent acceptance
+
+Independent follow-up review resolved both P1 findings with no further issues.
+Parent offline build, full quality check, isolated suites, build-identity test,
+packed SDK and bundled/unbundled CLI smoke checks, and five-document render
+checks passed. Coding-agent reported **2,868 passed / 50 skipped**. Tracked source
+was unchanged during the successful gate. The first full run found three stale
+session-start ordering fixtures without the new session field; four test-only
+lines corrected them, preserving production invariants. Their seven tests then
+passed, followed by the complete gate rerun. No provider traffic was required.
+
+The additional fresh packed SDK probe passed: default-on without capture/Yolo
+environment, explicit opt-out, one actual owned TUI input observation persisted
+through an ordinary commit, and reopened history retaining three model-context
+messages without telemetry. Private key/body content was absent from the metadata;
+no provider request occurred. Two initial probe import failures were corrected
+by using the public `pi-ai/compat` factory instead of obsolete root exports;
+production code was unchanged. Fixture package paths were recorded before cleanup.
+
+Publication, installation/restart, loaded-runtime and live-terminal checks remain
+human steps. Repository documentation URL publication is not verified.
+No full suite/build/package gate, paid provider request, production capture,
+profiling, inspector activation, scanner/workflow/Yolo change, staging, commit,
+push, deployment or restart was performed by this sourcewriter.

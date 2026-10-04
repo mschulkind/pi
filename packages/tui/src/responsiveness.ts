@@ -17,39 +17,61 @@ export interface TuiResponsivenessObservation {
 	emit: TuiResponsivenessObserver;
 }
 const subscriptions = new Map<object, TuiResponsivenessObserver>();
+const scoped = new Map<object, Map<object, TuiResponsivenessObserver>>();
+const observations = new WeakMap<object, TuiResponsivenessObservation>();
 let generation = 0;
 let observation: TuiResponsivenessObservation | undefined;
 const ignoreRejection = () => {};
-function refresh(): void {
-	const callbacks = [...subscriptions.values()];
+function compose(callbacks: TuiResponsivenessObserver[]): TuiResponsivenessObservation | undefined {
 	const currentGeneration = ++generation;
-	observation =
-		callbacks.length === 0
-			? undefined
-			: {
-					generation: currentGeneration,
-					emit(kind, durationMs) {
-						for (const callback of callbacks) {
-							try {
-								const result = callback(kind, durationMs);
-								if (result) void result.catch(ignoreRejection);
-							} catch {}
-						}
-					},
-				};
+	return callbacks.length === 0
+		? undefined
+		: {
+				generation: currentGeneration,
+				emit(kind, durationMs) {
+					for (const callback of callbacks) {
+						try {
+							const result = callback(kind, durationMs);
+							if (result) void result.catch(ignoreRejection);
+						} catch {}
+					}
+				},
+			};
 }
-/** At most four independent owners; unsubscribing never removes another owner's subscription.
+function refresh(changedSource?: object): void {
+	if (changedSource) {
+		const callbacks = scoped.get(changedSource);
+		const current = callbacks ? compose([...subscriptions.values(), ...callbacks.values()]) : undefined;
+		if (current) observations.set(changedSource, current);
+		else observations.delete(changedSource);
+		return;
+	}
+	observation = compose([...subscriptions.values()]);
+	for (const [source, callbacks] of scoped) {
+		const current = compose([...subscriptions.values(), ...callbacks.values()]);
+		if (current) observations.set(source, current);
+		else observations.delete(source);
+	}
+}
+/** Four owners per scope. Optional source confines observations to that actual TUI instance.
  * Synchronous observer work still consumes main-thread time: keep callbacks bounded. */
-export function subscribeTuiResponsiveness(callback: TuiResponsivenessObserver): () => void {
-	if (subscriptions.size >= 4) throw new Error("TUI responsiveness observer limit reached");
+export function subscribeTuiResponsiveness(callback: TuiResponsivenessObserver, source?: object): () => void {
+	const callbacks = source ? (scoped.get(source) ?? new Map<object, TuiResponsivenessObserver>()) : subscriptions;
+	if (callbacks.size >= 4) throw new Error("TUI responsiveness observer limit reached");
+	if (source) scoped.set(source, callbacks);
 	const owner = {};
-	subscriptions.set(owner, callback);
-	refresh();
+	callbacks.set(owner, callback);
+	refresh(source);
 	return () => {
-		if (subscriptions.delete(owner)) refresh();
+		if (!callbacks.delete(owner)) return;
+		if (source && callbacks.size === 0) {
+			scoped.delete(source);
+			observations.delete(source);
+		}
+		refresh(source);
 	};
 }
-/** Disabled hot paths only read this optional static observer. */
-export function getTuiResponsivenessObservation(): TuiResponsivenessObservation | undefined {
-	return observation;
+/** Disabled hot paths only read optional cached observations; no scans or allocations. */
+export function getTuiResponsivenessObservation(source?: object): TuiResponsivenessObservation | undefined {
+	return (source && observations.get(source)) || observation;
 }

@@ -1,38 +1,31 @@
 ---
-status: in-review
+status: accepted
 ---
 
-# Core responsiveness tasks
+# Default-on session responsiveness tasks
 
-## Completed implementation
+## Completed sourcewriter work
 
-- [x] Read producer/runtime, root responsiveness and sibling workflow references;
-  keep their source and documentation read-only.
-- [x] Add tests first; observe missing-module red for TUI and recorder modules.
-- [x] Instrument actual input, redraw scheduling and renderer boundaries in both
-  TUI modes, preserving source exceptions and disabled hot-path work.
-- [x] Add explicitly activated, bounded event-loop/TUI capture with asynchronous
-  private storage, ownership checks, retention and bounded shutdown.
-- [x] Integrate CLI/interactive lifecycle and truthful `/runtime` health.
-- [x] Add fake-clock, disabled, storage-failure, genuinely blocked-writer,
-  delayed-initialization, ownership and repeat-lifecycle regressions.
-- [x] Fix observed-red regression: waiting for current IO while capture is live
-  must not release its ownership lock.
-- [x] Add source-fork documentation and Unreleased changelog entries.
-- [x] Resolve reviewer P1 with six observed-red noninteractive lifecycle tests:
-  RPC EOF/extension shutdown/SIGTERM/SIGHUP and print SIGTERM/SIGHUP now await
-  bounded telemetry close before hard exit; lock removal permits a fresh capture.
-- [x] Resolve reviewer P2 with an observed-red changelog-link test and a stable
-  fork repository URL; package-root links no longer escape installed content.
+- [x] Supersede standalone capture with the approved default-on history policy;
+  revise stage docs before source edits and obtain explicit bounded synchronous
+  piggyback/final-append approval. Root documentation remains parent-owned.
+- [x] Add permanent observed-red regressions, implement bounded SessionManager
+  buffering/health, actual SDK/session ownership, and isolated TUI callbacks.
+- [x] Cover real interactive/RPC/print and SDK disposal, renderer replacement,
+  new/resume/fork/tree origins, preserved inherited history, and opt-out.
+- [x] Cover persistence/reopen/leaf, setup-only commits, memory-only/empty/deleted
+  files, idle/lifetime/queue/byte bounds and metadata/ordinary failure isolation.
+- [x] Verify model/summary/transcript/tree/HTML/content-search exclusion and
+  preserve source exceptions and inert disabled callbacks.
+- [x] Record fresh 98/98 coding-agent tests, 106/106 TUI tests, full npm check,
+  whitespace/no-staged checks and unchanged released sections in QA.
 
-## Acceptance queue
+## Remaining gates
 
-- [x] Initial independent source/security/lifecycle review completed; P1/P2 found.
-- [x] Parent independent re-review of P1/P2 fixes and final acceptance.
-- [x] Parent full offline suite, build, packed SDK/CLI and documentation gates.
-- [ ] Human publication and installation/restart, only after acceptance.
+- [x] Parent independent follow-up review and full offline/build/check/isolated
+  suites/build-identity/packed SDK+CLI/document gates; packaged actual-session
+  telemetry persistence/reopen/private-content/opt-out probe passed.
+- [ ] Human publication/installation/restart after acceptance.
 
-Profiling was removed from scope at the user's request. Telemetry samples from
-an installed process remain distinct from fixture evidence; no production CPU
-or latency improvement is claimed. Publication, deployment and restart are
-human steps. See [QA](qa.md) for the parent landing evidence.
+Prior design gates predate this changed policy. No production CPU/latency gain,
+loaded build identity, deployment or acceptance is claimed from source fixtures.

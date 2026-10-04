@@ -1,19 +1,19 @@
-import { chmod, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Terminal } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
-import { getCoreTelemetryStatus, startCoreTelemetry, stopCoreTelemetry } from "../../src/core/core-telemetry.ts";
 import { formatRuntimeInfo, getRuntimeInfo } from "../../src/core/runtime-info.ts";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { InteractiveMode } from "../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { createHarness, getAssistantTexts } from "./harness.ts";
 
 vi.mock("../../src/utils/tools-manager.ts", () => ({ ensureTool: async (name: string) => `/tmp/${name}` }));
 vi.mock("../../src/utils/syntax-highlight.ts", () => ({ loadAllHighlightLanguages: async () => {} }));
-
 class TestTerminal implements Terminal {
 	columns = 80;
 	rows = 24;
@@ -36,39 +36,39 @@ class TestTerminal implements Terminal {
 	setTitle(): void {}
 	setProgress(): void {}
 }
+function runtime(harness: Awaited<ReturnType<typeof createHarness>>) {
+	return new AgentSessionRuntime(
+		harness.session,
+		{
+			cwd: harness.tempDir,
+			agentDir: harness.tempDir,
+			modelRuntime: harness.session.modelRuntime,
+			settingsManager: harness.settingsManager,
+			resourceLoader: harness.session.resourceLoader,
+			diagnostics: [],
+		},
+		async () => {
+			throw new Error("Unused runtime replacement");
+		},
+	);
+}
 
 test.each([false, true])(
-	"InteractiveMode lifecycle records input/frames and drains before graceful exit (signal=%s) without extra model calls",
+	"InteractiveMode records owned input/frames in history before graceful exit (signal=%s)",
 	async (fromSignal) => {
 		vi.useFakeTimers();
 		initTheme("dark");
-		const directory = await mkdtemp(join(tmpdir(), "pi-core-lifecycle-"));
-		await chmod(directory, 0o700);
-		vi.stubEnv("PI_CORE_TELEMETRY", "1");
-		vi.stubEnv("PI_CORE_TELEMETRY_DIR", directory);
+		vi.stubEnv("PI_CORE_TELEMETRY", undefined);
+		const directory = await mkdtemp(join(tmpdir(), "pi-history-lifecycle-"));
 		const harness = await createHarness({
+			sessionManager: SessionManager.create(directory, directory),
 			settings: { tuiMode: "regular", terminal: { showTerminalProgress: false }, quietStartup: true },
 		});
-		const runtime = new AgentSessionRuntime(
-			harness.session,
-			{
-				cwd: harness.tempDir,
-				agentDir: harness.tempDir,
-				modelRuntime: harness.session.modelRuntime,
-				settingsManager: harness.settingsManager,
-				resourceLoader: harness.session.resourceLoader,
-				diagnostics: [],
-			},
-			async () => {
-				throw new Error("Unused runtime replacement");
-			},
-		);
 		const terminal = new TestTerminal();
-		const mode = new InteractiveMode(runtime, { terminal });
-		const recorder = startCoreTelemetry()!;
+		const mode = new InteractiveMode(runtime(harness), { terminal });
 		try {
-			await recorder.ready;
-			expect(startCoreTelemetry()).toBe(recorder);
+			const owner = harness.session.coreTelemetry;
+			expect(owner).toBeDefined();
 			const initializing = mode.init();
 			await vi.advanceTimersByTimeAsync(100);
 			await initializing;
@@ -78,40 +78,43 @@ test.each([false, true])(
 			await harness.session.prompt("private prompt");
 			expect(getAssistantTexts(harness)).toEqual(["private result"]);
 			expect(harness.getPendingResponseCount()).toBe(0);
-			await recorder.sample();
-			const snapshot = getRuntimeInfo(harness.session.modelRuntime, []);
+			owner!.sample();
+			const snapshot = getRuntimeInfo(harness.session.modelRuntime, [], owner);
 			expect(snapshot.responsiveness).toMatchObject({
 				configured: true,
 				live: true,
-				health: { inputDispatches: 1 },
+				persistence: "history",
+				health: { inputDispatches: 1, bufferedRecords: 1 },
 			});
 			expect(snapshot.responsiveness.health!.frames).toBeGreaterThan(0);
 			expect(formatRuntimeInfo(snapshot)).toContain("configured=true live=true");
-			mode.stop();
-			await stopCoreTelemetry();
-			expect(recorder.status().live).toBe(false);
-			const records = await readdir(directory);
-			for (const name of records)
-				expect(await readFile(join(directory, name), "utf8")).not.toMatch(/private|prompt|result|input body/);
-			const again = startCoreTelemetry()!;
-			await again.ready;
-			expect(again).not.toBe(recorder);
-			expect(getCoreTelemetryStatus().health!.inputDispatches).toBe(0);
+			harness.session.sessionManager.appendSessionInfo("fixture");
+			const entryRenderer = vi.spyOn(harness.session.extensionRunner, "getEntryRenderer");
+			mode.renderInitialMessages();
+			expect(entryRenderer).not.toHaveBeenCalledWith("pi.core-responsiveness");
+			expect((mode as unknown as { switchTuiMode(mode: "fullscreen"): boolean }).switchTuiMode("fullscreen")).toBe(
+				true,
+			);
+			terminal.input!("private replaced renderer");
+			expect(owner!.status().health!.inputDispatches).toBe(2);
 			const exit = new Error("fixture exit");
 			const exiting = vi.spyOn(process, "exit").mockImplementation(() => {
-				expect(again.status().live).toBe(false);
-				expect(again.status().health!.queuedRecords).toBe(0);
+				expect(owner!.status()).toMatchObject({ live: false, health: { bufferedRecords: 0 } });
+				const entries = harness.session.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom" && entry.customType === "pi.core-responsiveness");
+				expect(entries.length).toBeGreaterThan(0);
+				expect(JSON.stringify(entries)).not.toMatch(/private|prompt|result|input body/);
+				expect(readFileSync(harness.session.sessionFile!, "utf8")).toContain('"schemaVersion":2');
 				throw exit;
 			});
-			const shutdownMode = mode as unknown as { shutdown(options: { fromSignal: boolean }): Promise<void> };
-			await expect(shutdownMode.shutdown({ fromSignal })).rejects.toBe(exit);
+			await expect(
+				(mode as unknown as { shutdown(options: { fromSignal: boolean }): Promise<void> }).shutdown({ fromSignal }),
+			).rejects.toBe(exit);
 			expect(exiting).toHaveBeenCalledWith(0);
-			expect(await readdir(directory)).not.toContain("core-telemetry.lock");
-			exiting.mockRestore();
 		} finally {
 			vi.restoreAllMocks();
 			mode.stop();
-			await stopCoreTelemetry();
 			harness.cleanup();
 			vi.unstubAllEnvs();
 			vi.useRealTimers();
@@ -119,3 +122,32 @@ test.each([false, true])(
 		}
 	},
 );
+
+test("SDK sessions own independent producers and disposal does not stop a concurrent session", async () => {
+	vi.stubEnv("PI_CORE_TELEMETRY", undefined);
+	const first = await createHarness();
+	const second = await createHarness();
+	try {
+		expect(first.session.coreTelemetry).toBeDefined();
+		expect(second.session.coreTelemetry).toBeDefined();
+		expect(first.session.coreTelemetry).not.toBe(second.session.coreTelemetry);
+		first.session.dispose();
+		expect(first.session.coreTelemetry!.status().live).toBe(false);
+		expect(second.session.coreTelemetry!.status().live).toBe(true);
+	} finally {
+		first.cleanup();
+		second.cleanup();
+		vi.unstubAllEnvs();
+	}
+});
+
+test("SDK opt-out creates no producer", async () => {
+	vi.stubEnv("PI_CORE_TELEMETRY", "0");
+	const harness = await createHarness();
+	try {
+		expect(harness.session.coreTelemetry).toBeUndefined();
+	} finally {
+		harness.cleanup();
+		vi.unstubAllEnvs();
+	}
+});

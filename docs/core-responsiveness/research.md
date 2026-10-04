@@ -4,6 +4,13 @@ status: in-review
 
 # Core responsiveness: measurement boundaries
 
+The previous standalone diagnostic capture is superseded by default-on session
+history metadata (`PI_CORE_TELEMETRY=0` opt-out). Real SessionManager append IO
+is synchronous, not an async journal API. Parent approved bounded buffered
+windows piggybacked on ordinary commits and a bounded graceful final append to
+an existing conversation file; no timer/input/render disk flush. See the
+[settled plan](plan.md) for that explicit tradeoff and current lifecycle policy.
+
 ## Problem and evidence
 
 The root [responsiveness research](../../../../docs/pi/responsiveness/research.md)

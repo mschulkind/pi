@@ -478,6 +478,8 @@ export function findCutPoint(
 		}
 	}
 
+	// Retain adjacent metadata without letting it change the context-visible turn boundary.
+	const contextCutIndex = cutIndex;
 	// Scan backwards from cutIndex to include adjacent metadata entries that do not affect context.
 	while (cutIndex > startIndex) {
 		const prevEntry = entries[cutIndex - 1];
@@ -489,9 +491,9 @@ export function findCutPoint(
 	}
 
 	// Determine if this is a split turn
-	const cutEntry = entries[cutIndex];
+	const cutEntry = entries[contextCutIndex];
 	const startsTurn = isTurnStartEntry(cutEntry);
-	const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+	const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, contextCutIndex, startIndex);
 
 	return {
 		firstKeptEntryIndex: cutIndex,
@@ -860,13 +862,15 @@ function findProjectedCutPoint(
 		);
 	if (isRecoveryOmissionSuffix) cutIndex++;
 
+	// Raw metadata retention must not reclassify a visible turn-start cut as split.
+	const contextCutIndex = cutIndex;
 	while (cutIndex > startIndex) {
 		const previous = entries[cutIndex - 1];
 		if (previous.sourceEntry.type === "compaction" || previous.messages.length > 0) break;
 		cutIndex--;
 	}
-	const startsTurn = isProjectedTurnStart(entries[cutIndex]);
-	const turnStartIndex = startsTurn ? -1 : findProjectedTurnStartIndex(entries, cutIndex, startIndex);
+	const startsTurn = isProjectedTurnStart(entries[contextCutIndex]);
+	const turnStartIndex = startsTurn ? -1 : findProjectedTurnStartIndex(entries, contextCutIndex, startIndex);
 	return {
 		firstKeptEntryIndex: cutIndex,
 		turnStartIndex,

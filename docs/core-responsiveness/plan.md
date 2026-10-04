@@ -1,71 +1,77 @@
 ---
-status: in-review
+status: awaiting-review
 ---
 
-# Core responsiveness implementation plan
+# Default-on session responsiveness plan
 
-## Scope and contract
+## Settled policy (supersedes the diagnostic capture)
 
-Implement producer-only metadata aggregates in this source fork. Keep transport
-recording, workflow telemetry, scanners, profiling and inspectors unchanged.
-Do not infer activity from a durable directory or configure a provider.
+Core responsiveness metadata is enabled by default on host and jail. Only
+`PI_CORE_TELEMETRY=0` opts out. `PI_CORE_TELEMETRY_DIR` is deprecated/ignored;
+`YOLO_DURABLE_DIR` does not control this producer. No standalone capture files,
+locks, directory creation, ten-minute capture deadline or synthetic sessions.
+API attempt files, workflow journals, scanners and inspector/profiling stay unchanged.
 
-Activation requires **both** `PI_CORE_TELEMETRY=1` and an absolute
-`PI_CORE_TELEMETRY_DIR`. Any other switch spelling, including `0`, disables
-capture; directory-only and `YOLO_DURABLE_DIR` configurations do not activate it.
-The selected directory must be owner-private; unsafe storage fails closed.
+## Approved persistence tradeoff
 
-## Design
+The real SessionManager uses synchronous normal JSONL commits; it has no async
+journal append API. The parent explicitly approved a **narrow buffered/piggyback
+adaptation**, not a conversion of all history persistence to asynchronous IO.
+No input/render callback serializes or persists metadata. Timers only aggregate
+and enqueue bounded windows; they never flush disk. At an actual ordinary commit,
+SessionManager inserts queued custom rows before the committing row and combines
+rows into the existing write. Setup-only rows in a new persistent session leave
+windows pending until its first conversation commit. <=2 bounded envelope
+reserializations rebind only the parent within the same origin/branch. Existing synchronous history IO and ordinary
+commit failure semantics remain unchanged.
 
-1. Add a passive scalar-only observer at existing `TuiBase` input, request,
-   scheduling and actual renderer boundaries, shared by both renderer modes.
-   Disabled paths only read an optional observer before continuing existing
-   behavior. No telemetry timer, filesystem call, serialization, per-event
-   clock, identity allocation or subscription scan runs on disabled hot paths.
-2. Add one CLI-process recorder, with repeat-live starts sharing the same owner.
-   Monitor event-loop delay and aggregate nine fixed TUI categories. Subscriber
-   exceptions/rejections are isolated and never replace source exceptions.
-3. Sample every five seconds with an unreferenced timer. Reset aggregate windows;
-   preserve null delay statistics without histogram samples. Bound capture,
-   memory, output, ownership and shutdown independently.
-4. Use asynchronous serialized private file writes, one pending record and two
-   fixed retention slots. No directory scans or synchronous writes. Reject
-   symlinks, unsafe ownership/permissions and replacement directories. A lock
-   prevents two captures from using the same directory.
-5. Start before CLI mode execution and close in `finally`. Graceful hard exits
-   in interactive, RPC and print modes await bounded close; public stop, crash
-   and dead-terminal exits detach
-   without blocking terminal cleanup. Do not change model or signal semantics.
-6. Extend `/runtime` snapshots with configuration, live state, static reason,
-   coverage and nullable observed health. Configuration proves neither samples
-   nor persistence. Reporting remains snapshot-only and exposes no path.
+Graceful finalization may perform one extra synchronous <=2-row metadata-only
+append, **only to an already-created conversation file**. That failure is caught
+and counted. Idle metadata can remain buffered until a normal commit or graceful
+shutdown; neither immediate idle durability nor a hard wall-time shutdown bound
+against filesystem stalls is promised. This tradeoff supersedes the original
+blanket asynchronous-persistence requirement.
 
-## Bounds
+## Producer and lifecycle
 
-| Resource | Fixed limit |
-| --- | --- |
-| TUI categories / subscription owners | 9 / 4 |
-| Event-loop resolution / sample cadence | 20 ms / 5,000 ms |
-| Capture windows / elapsed deadline | 120 / 600,000 ms |
-| Record / cumulative accepted session bytes | 8,192 / 1,048,576 |
-| In-flight plus pending records | 2 |
-| Retained committed files | 2 |
-| Shutdown drain wait | 100 ms |
-| Numeric count / individual duration | 1 billion / 600,000 ms |
-| Directory string / path components | 4,096 characters / 64 |
+- One owner per actual AgentSession (including SDK construction), no global
+  cross-session aggregate. TUI observers attach to the actual owning TUI only.
+- Nine existing closed scalar categories and inclusive callback semantics remain.
+  Event-loop delay is explicitly process-wide observation during this session's
+  window, overlapping concurrent sessions; never sum it as session CPU.
+- Ordinary session history uses `type=custom`, `customType=pi.core-responsiveness`.
+  Metadata contributes no model messages, transcript rows, summary content or
+  ordinary content-search text. Normal envelopes supply timestamps/linkage.
+- Queue snapshots bind session identity and branch/generation. Pending windows
+  cannot follow new/resume/fork/tree replacement into another origin. Branch
+  changes discard/count pending old-branch windows and reset the scalar/histogram
+  generation on the next sample. Disposal detaches idempotently. Inherited fork
+  history/entry IDs retain normal parentSession lineage; copied observations do
+  not inflate current producer health or become new fork measurements.
+- No persistent file without conversation; --no-session is memory-only. Process
+  statistics without an actual session never manufacture one.
+- /runtime reports default configuration, session owner/live state, buffered vs
+  persisted health, disabled/in-memory/no-active-session truthfully, without paths.
 
-Shutdown cannot cancel an already-issued OS filesystem operation. Detach timers
-and observers immediately, abandon pending output on deadline, then clean up
-owned handles/temp/lock when the issued operation eventually returns. Never
-remove another owner's lock. A crashed process can leave a stale lock/temp file;
-fail closed on the next launch rather than guessing ownership.
+## Bounds and idle policy
 
-## Test and review sequence
+Fixed nine metrics, 20-ms histogram resolution, 5-second unref sampling cadence,
+<=8,192 bytes per enveloped row and <=2 pre-serialized pending rows per manager.
+Additional windows drop with cumulative counters; no ordinary entry is dropped.
+No ten-minute lifetime limit or standalone retention slots. History retention is
+normal append-only session retention. Idle event-loop windows are recorded at
+most once per minute; TUI activity can make a five-second window useful. Sampling
+or metadata persistence never emits rendering events or requests redraws.
+Counts cap at one billion, individual durations at 600,000 ms and totals at the
+safe integer ceiling. Opt-out constructs no recorder/clocks/timers/subscriptions.
 
-Write source-named tests before new modules and observe missing-module failures.
-Exercise real renderer callbacks with fake clocks, real interactive/faux-provider
-lifecycle, disabled paths, consumed input, source/observer exceptions, scheduled
-and direct rendering, ownership changes, storage failures, actual blocked writes,
-limits and repeat captures. Run edited targeted tests and full `npm run check`.
-Parent owns independent review, full offline suite, build and packed-consumer
-checks. No commit, push, restart or deployment belongs to this writer.
+## Tests before source edits
+
+Observe red against 9adadcb8d for default activation, real piggyback one-write/
+reopen/leaf behavior, projection/summary/UI/search exclusion, memory-only/opt-out,
+origin changes/fork/branch, independent sessions/TUIs, queue drops, idle behavior,
+metadata-only final-write failures and normal failure propagation. Exercise
+actual SDK, interactive, RPC and print modes with local faux providers. Replace
+only obsolete diagnostic storage/capture tests. Run targeted tests and full
+npm run check. Parent owns independent review and managed offline/build/package
+gates. No production performance claim, commit, push, deploy or restart.
